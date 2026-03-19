@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Rafid K.", email = "rafidka@gmail.com" }
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = []
 
 [project.scripts]
@@ -15,3 +15,71 @@ llm-from-scratch = "llm_from_scratch:main"
 [build-system]
 requires = ["uv_build>=0.10.11,<0.11.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.408",
+    "ruff>=0.15.7",
+]
+
+# ---------- Ruff ----------
+[tool.ruff]
+target-version = "py312"
+src = ["src"]
+line-length = 88
+
+[tool.ruff.lint]
+# Enable ALL rule groups. Individually disable only rules that genuinely
+# conflict or are inapplicable to this project.
+select = ["ALL"]
+ignore = [
+    # ----- Rules that conflict with the Ruff formatter -----
+    "W191",   # tab-indentation (formatter handles this)
+    "E111",   # indentation-with-invalid-multiple (formatter)
+    "E114",   # indentation-not-multiple-of-four-comment (formatter)
+    "E117",   # over-indented (formatter)
+    "D206",   # indent-with-spaces (formatter)
+    "D300",   # triple-single-quotes (formatter)
+    "Q000",   # bad-quotes-inline-string (formatter)
+    "Q001",   # bad-quotes-multiline-string (formatter)
+    "Q002",   # bad-quotes-docstring (formatter)
+    "Q003",   # avoidable-escaped-quote (formatter)
+    "COM812", # missing-trailing-comma (formatter)
+    "COM819", # prohibited-trailing-comma (formatter)
+    "ISC001", # single-line-implicit-string-concatenation (formatter)
+    "ISC002", # multi-line-implicit-string-concatenation (formatter)
+    "E501",   # line-too-long (formatter handles this)
+
+    # ----- Framework-specific rules not applicable -----
+    "DJ",     # flake8-django (not a Django project)
+    "AIR",    # Airflow (not an Airflow project)
+    "FAST",   # FastAPI (not a FastAPI project)
+    "NPY",    # NumPy rules (not using NumPy conventions)
+    "PD",     # pandas-vet (not a pandas project)
+
+    # ----- Opinionated rules we intentionally skip -----
+    "D203",   # one-blank-line-before-class (conflicts with D211)
+    "D213",   # multi-line-summary-second-line (conflicts with D212)
+    "CPY",    # flake8-copyright (no copyright headers needed)
+    "FIX",    # flake8-fixme (allow TODO/FIXME comments during development)
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",   # assert allowed in tests
+    "D100",   # missing docstring in public module
+    "D103",   # missing docstring in public function
+    "ARG",    # unused arguments (fixtures)
+    "PLR2004", # magic value comparisons in tests
+]
+
+# ---------- Pyright ----------
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+include = ["src"]
+venvPath = "."
+venv = ".venv"

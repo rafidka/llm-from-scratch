@@ -3,7 +3,7 @@
 Building a large language model from scratch, following Sebastian Raschka's book as a
 foundation while incorporating deep dives into modern techniques and architectures.
 
-**Environment**: Python 3.14, uv, PyTorch. Development/testing on MacBook Pro (MPS),
+**Environment**: Python 3.12, uv, PyTorch. Development/testing on MacBook Pro (MPS),
 heavy training offloaded to cloud GPUs.
 
 **Total estimated effort**: ~25-38 sessions
@@ -100,7 +100,7 @@ Evolving our GPT-2 toward a modern LLM (LLaMA-style):
 - [ ] **Grouped Query Attention (GQA)** — Implement KV head sharing
 - [ ] **KV Cache** — Implement efficient autoregressive inference
 - [ ] **Flash Attention** — Understand the IO-aware algorithm (implement simplified version,
-  use the real thing via PyTorch `scaled_dot_product_attention`)
+      use the real thing via PyTorch `scaled_dot_product_attention`)
 
 ---
 
