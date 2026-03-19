@@ -2,8 +2,8 @@
 
 import re
 
-UNK_TOKEN = "<|unk|>"
-ENDOFTEXT_TOKEN = "<|endoftext|>"
+UNK_TOKEN = "<|unk|>"  # noqa: S105
+ENDOFTEXT_TOKEN = "<|endoftext|>"  # noqa: S105
 
 
 class SimpleTokenizer:

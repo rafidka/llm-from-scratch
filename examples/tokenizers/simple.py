@@ -1,4 +1,5 @@
-from llm_from_scratch.tokens import SimpleTokenizer
+from llm_from_scratch.tokenizers.simple import SimpleTokenizer
+
 
 corpus = "Hello, world. Is this-- is this working?"
 tokenizer = SimpleTokenizer(corpus)
