@@ -14,8 +14,8 @@ heavy training offloaded to cloud GPUs.
 
 **Effort: 2-3 sessions**
 
-- [ ] Understand the tokenization spectrum: character → word → subword (BPE)
-- [ ] Build a simple tokenizer from scratch (vocabulary building, encode/decode)
+- [x] Understand the tokenization spectrum: character → word → subword (BPE)
+- [x] Build a simple tokenizer from scratch (vocabulary building, encode/decode)
 - [ ] **Deep dive**: Implement BPE merge algorithm by hand
 - [ ] Use `tiktoken` with GPT-2's tokenizer (`cl100k_base` / `gpt2` encoding)
 - [ ] Build a `Dataset` and `DataLoader` for next-token prediction (sliding window)
