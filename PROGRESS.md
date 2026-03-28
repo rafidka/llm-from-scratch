@@ -57,3 +57,27 @@
 ### Open questions
 - Vocabulary ordering is non-deterministic (minor) — could sort initial chars for reproducibility
 - Next: Use `tiktoken` with GPT-2's tokenizer, then build `Dataset` and `DataLoader`
+
+## Session 3 — 2026-03-28 — Tokenization (Part 3)
+
+### What we covered
+- Implemented `TiktokenTokenizer` wrapper class for OpenAI's tiktoken library
+- Loaded GPT-2's pretrained tokenizer (50,257 vocab size)
+- Compared our BPE tokenizer (174 vocab) against GPT-2's tokenizer
+- Observed efficiency differences: GPT-2 tokenizes "Hello world!" in 3 tokens vs our 8 tokens
+
+### Key learnings
+- `tiktoken.get_encoding("gpt2")` loads GPT-2's pretrained BPE tokenizer
+- GPT-2's massive vocabulary (50,257) learned from billions of tokens makes it far more efficient than our toy tokenizer
+- Production tokenizers like tiktoken use byte-level BPE and sophisticated regex patterns for robustness
+- The same interface (`encode`, `decode`) allows swapping between tokenizers easily
+
+### Code written
+- `src/llm_from_scratch/tokenizers/tiktoken_adapter.py` — `TiktokenTokenizer` wrapper class
+- `examples/tokenizers/compare_tokenizers.py` — Comparison script for GPT-2 vs our BPE
+
+### PLAN.md items completed
+- [x] Use `tiktoken` with GPT-2's tokenizer (`cl100k_base` / `gpt2` encoding)
+
+### Open questions
+- Next: Build a `Dataset` and `DataLoader` for next-token prediction (sliding window)

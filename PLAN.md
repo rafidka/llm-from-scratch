@@ -17,7 +17,7 @@ heavy training offloaded to cloud GPUs.
 - [x] Understand the tokenization spectrum: character → word → subword (BPE)
 - [x] Build a simple tokenizer from scratch (vocabulary building, encode/decode)
 - [x] **Deep dive**: Implement BPE merge algorithm by hand
-- [ ] Use `tiktoken` with GPT-2's tokenizer (`cl100k_base` / `gpt2` encoding)
+- [x] Use `tiktoken` with GPT-2's tokenizer (`cl100k_base` / `gpt2` encoding)
 - [ ] Build a `Dataset` and `DataLoader` for next-token prediction (sliding window)
 
 **Key concepts**: special tokens, vocabulary size tradeoffs, byte-level fallback
