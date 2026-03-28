@@ -2,13 +2,15 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+from llm_from_scratch.tokenizers.base import Tokenizer
+
 UNK = 0
 UNK_STR = "<|unk|>"
 EOS = 1
 EOS_STR = "<|eos|>"
 
 
-class BPETokenizer:
+class BPETokenizer(Tokenizer):
     def __init__(self, corpus: str, num_merges: int):
         self._train(corpus, num_merges)
 
@@ -99,7 +101,7 @@ class BPETokenizer:
 
         return tuple(new_tokens)
 
-    def encode(self, text: str) -> tuple[int, ...]:
+    def encode(self, text: str) -> list[int]:
         tokens: list[str] = []
         for token in self._tokenize(text):
             sub_tokens = tuple(token)
@@ -110,9 +112,9 @@ class BPETokenizer:
             tokens.extend(sub_tokens)
 
         # Convert to IDs
-        return tuple(self._token_to_id.get(token, UNK) for token in tokens)
+        return [self._token_to_id.get(token, UNK) for token in tokens]
 
-    def decode(self, token_ids: tuple[int, ...]) -> str:
+    def decode(self, token_ids: list[int]) -> str:
         def id_to_token(token_id: int) -> str:
             if token_id not in self._id_to_token:
                 raise RuntimeError(f"Invalid token id: {token_id}")

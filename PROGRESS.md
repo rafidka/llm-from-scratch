@@ -80,4 +80,28 @@
 - [x] Use `tiktoken` with GPT-2's tokenizer (`cl100k_base` / `gpt2` encoding)
 
 ### Open questions
-- Next: Build a `Dataset` and `DataLoader` for next-token prediction (sliding window)
+- None — Phase 1 complete
+
+## Session 4 — 2026-03-28 — Tokenization (Part 4)
+
+### What we covered
+- Built `LLMDataset` class for next-token prediction with sliding window approach
+- Implemented `__len__` and `__getitem__` methods
+- Created `create_dataloader` function wrapping PyTorch's DataLoader
+- Verified batching produces correct shapes `(batch_size, max_length)`
+
+### Key learnings
+- Sliding window: for tokens `[t1, t2, ..., tn]`, create input-target pairs where target is shifted by 1
+- `__len__` formula: `max(floor((len(tokens) - max_length - 1) / stride) + 1, 0)`
+- PyTorch's default `collate_fn` correctly stacks tuples of tensors
+
+### Code written
+- `src/llm_from_scratch/data/dataset.py` — `LLMDataset` class
+- `src/llm_from_scratch/data/loader.py` — `create_dataloader` function
+- `examples/data/dataset.py` — Example demonstrating dataset and dataloader
+
+### PLAN.md items completed
+- [x] Build a `Dataset` and `DataLoader` for next-token prediction (sliding window)
+
+### Open questions
+- Next: Phase 2 — Attention Mechanism

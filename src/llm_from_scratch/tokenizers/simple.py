@@ -2,11 +2,13 @@
 
 import re
 
+from llm_from_scratch.tokenizers.base import Tokenizer
+
 UNK_TOKEN = "<|unk|>"  # noqa: S105
 ENDOFTEXT_TOKEN = "<|endoftext|>"  # noqa: S105
 
 
-class SimpleTokenizer:
+class SimpleTokenizer(Tokenizer):
     """A simple tokenizer that splits text into tokens."""
 
     def __init__(self, text: str) -> None:

@@ -13,4 +13,4 @@ wheels/
 .vscode/
 
 # Downloaded data
-data/
+/data/
