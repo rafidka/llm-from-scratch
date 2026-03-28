@@ -28,9 +28,9 @@ heavy training offloaded to cloud GPUs.
 
 **Effort: 3-4 sessions**
 
-- [ ] Implement simplified self-attention (dot product attention)
-- [ ] Add trainable weights → single-head attention
-- [ ] Implement causal (masked) self-attention
+- [x] Implement simplified self-attention (dot product attention)
+- [x] Add trainable weights → single-head attention
+- [x] Implement causal (masked) self-attention
 - [ ] Extend to multi-head attention
 - [ ] **Deep dive**: Attention as soft dictionary lookup, attention pattern visualization
 - [ ] **Deep dive**: Computational complexity of attention (O(n²) and why it matters)

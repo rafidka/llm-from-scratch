@@ -105,3 +105,31 @@
 
 ### Open questions
 - Next: Phase 2 — Attention Mechanism
+
+## Session 5 — 2026-03-28 — Attention Mechanism (Part 1)
+
+### What we covered
+- Implemented simplified self-attention (dot product attention with no learnable parameters)
+- Added trainable Q, K, V projections → single-head attention
+- Implemented causal (masked) self-attention to prevent attending to future tokens
+- Discussed why `sqrt(d_k)` scaling prevents softmax saturation
+- Debugged mask implementation: `0 * -inf = nan`, fixed with `masked_fill`
+
+### Key learnings
+- Self-attention computes similarity via dot product, normalizes with softmax, then weighted-sums values
+- Scaled dot-product attention: `softmax(Q @ K^T / sqrt(d_k)) @ V`
+- Causal mask: upper triangular with `-inf` above diagonal ensures autoregressive property
+- `masked_fill` is differentiable and standard for applying masks — gradients don't need to flow through masked positions
+
+### Code written
+- `src/llm_from_scratch/attention/simplified.py` — `SimplifiedSelfAttention` class and `simplified_self_attention` function
+- `src/llm_from_scratch/attention/qkv.py` — `self_attention`, `self_causal_attention` functions and `SingleHeadAttention`, `CausalSelfAttention` classes
+- `examples/attention/simplified.py` — Example script for simplified attention
+
+### PLAN.md items completed
+- [x] Implement simplified self-attention (dot product attention)
+- [x] Add trainable weights → single-head attention
+- [x] Implement causal (masked) self-attention
+
+### Open questions
+- Next: Multi-head attention
