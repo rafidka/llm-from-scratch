@@ -1,16 +1,19 @@
+from __future__ import annotations
+
 from math import sqrt
-from typing import TYPE_CHECKING
 
 import torch
 from torch import nn
-
-if TYPE_CHECKING:
-    from torch import Tensor
+from torch import Tensor
 
 
 def scaled_dot_product_attention(
-    q: "Tensor", k: "Tensor", v: "Tensor", causal: bool
-) -> "Tensor":
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+    causal: bool,
+    return_attn_weights: bool = False,
+) -> Tensor | tuple[Tensor, Tensor]:
     # q/k/v: [batch, seq_len, embed_dim] or [seq_len, embed_dim]
     # scores: [..., seq_len, seq_len]
     # attn_weights: [..., seq_len, seq_len]
@@ -30,6 +33,8 @@ def scaled_dot_product_attention(
 
     output = attn_weights @ v
 
+    if return_attn_weights:
+        return output, attn_weights
     return output
 
 
@@ -45,7 +50,7 @@ class SingleHeadAttention(nn.Module):
         q = self.W_q(x)
         k = self.W_k(x)
         v = self.W_v(x)
-        return scaled_dot_product_attention(q, k, v, self.causal)
+        return scaled_dot_product_attention(q, k, v, self.causal)  # type: ignore
 
 
 class MultiHeadAttention(nn.Module):
@@ -87,7 +92,7 @@ class MultiHeadAttention(nn.Module):
         v = v.view(batch, seq_len, self.num_heads, self.head_dim)
         v = v.transpose(1, 2)  # transpose into [batch, num_heads, seq_len, head_dim]
 
-        attn = scaled_dot_product_attention(q, k, v, self.causal)
-        attn = attn.transpose(1, 2).contiguous().view(batch, seq_len, embed_dim)
+        attn = scaled_dot_product_attention(q, k, v, self.causal)  # type: ignore[assignment]
+        attn = attn.transpose(1, 2).contiguous().view(batch, seq_len, embed_dim)  # type: ignore[union-attr]
 
         return self.W_o(attn)
