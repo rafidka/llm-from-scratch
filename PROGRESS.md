@@ -131,5 +131,28 @@
 - [x] Add trainable weights → single-head attention
 - [x] Implement causal (masked) self-attention
 
+---
+  
+## Session 6 — 2026-03-29 — Attention Mechanism (Part 2)
+
+### What we covered
+- Implemented multi-head attention with parameterizable attention function
+- Discussed why one big projection matrix is more efficient than separate per-head matrices
+- Added output projection `W_o` to combine information across heads
+- Created `MultiHeadAttentionBase` with pluggable attention function, then subclassed `MultiHeadAttention` and `CausalMultiHeadAttention`
+- Verified causal masking: each row only attends to current and past tokens
+
+### Key learnings
+- Multi-head attention splits `embed_dim` into `num_heads × head_dim`, processes in parallel, then concatenates
+- `W_o` projection is essential for heads to "mix" — without it, heads don't interact
+- Reshape pattern: `[batch, seq, embed] → view + transpose → [batch, heads, seq, head_dim]`
+- Concat pattern: `[batch, heads, seq, head_dim] → transpose + view → [batch, seq, embed]`
+
+### Code written
+- `src/llm_from_scratch/attention/qkv.py` — Added `MultiHeadAttentionBase`, `MultiHeadAttention`, `CausalMultiHeadAttention`
+
+### PLAN.md items completed
+- [x] Extend to multi-head attention
+
 ### Open questions
-- Next: Multi-head attention
+- Next: Deep dives (attention visualization, computational complexity) or Phase 3 (GPT Architecture)
