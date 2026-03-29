@@ -156,3 +156,35 @@
 
 ### Open questions
 - Next: Deep dives (attention visualization, computational complexity) or Phase 3 (GPT Architecture)
+
+---
+
+## Session 7 — 2026-03-29 — Attention Mechanism (Part 3: Deep Dives)
+
+### What we covered
+- Explored attention as a "soft dictionary lookup" — queries match all keys with learned weights
+- Compared our attention with trained GPT-2 attention using visualizations
+- Loaded pre-trained GloVe embeddings and visualized raw attention patterns
+- Loaded GPT-2 via Hugging Face transformers and visualized learned attention weights
+- Compared Layer 0 vs Layer 11 attention patterns: early layers more local, later layers more semantic
+- Discussed computational complexity: O(n²) time and space, memory bottleneck for long sequences
+- Reviewed modern solutions: sparse attention, Flash Attention, sliding window, linear attention, KV cache
+
+### Key learnings
+- Raw embeddings without learned Q/K projections don't produce meaningful attention patterns
+- Learned attention shows what the model finds relevant through training
+- Early layers capture local/syntactic patterns; later layers capture semantic/contextual relationships
+- GPT-2 has 12 layers ×12 heads = 144 attention matrices to analyze
+- O(n²) complexity makes long sequences expensive: 128K context → 64 GB per attention matrix
+- Modern LLMs use various techniques to reduce complexity: Flash Attention, KV cache, GQA, sliding window
+
+### Code written
+- `examples/attention/attention_visualization.ipynb` — GloVe attention visualization
+- `examples/attention/gpt2_attn_vis.ipynb` — GPT-2 attention visualization
+
+### PLAN.md items completed
+- [x] **Deep dive**: Attention as soft dictionary lookup, attention pattern visualization
+- [x] **Deep dive**: Computational complexity of attention (O(n²) and why it matters)
+
+### Open questions
+- Next: Phase 3 — GPT Architecture

@@ -32,8 +32,8 @@ heavy training offloaded to cloud GPUs.
 - [x] Add trainable weights → single-head attention
 - [x] Implement causal (masked) self-attention
 - [x] Extend to multi-head attention
-- [ ] **Deep dive**: Attention as soft dictionary lookup, attention pattern visualization
-- [ ] **Deep dive**: Computational complexity of attention (O(n²) and why it matters)
+- [x] **Deep dive**: Attention as soft dictionary lookup, attention pattern visualization
+- [x] **Deep dive**: Computational complexity of attention (O(n²) and why it matters)
 
 ---
 
@@ -101,6 +101,8 @@ Evolving our GPT-2 toward a modern LLM (LLaMA-style):
 - [ ] **KV Cache** — Implement efficient autoregressive inference
 - [ ] **Flash Attention** — Understand the IO-aware algorithm (implement simplified version,
       use the real thing via PyTorch `scaled_dot_product_attention`)
+- [ ] **Sliding window attention** — Limit attention to local context, reduce complexity
+- [ ] **Linear attention** — Approximate softmax with kernel trick for O(n) complexity
 
 ---
 
