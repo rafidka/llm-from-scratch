@@ -47,8 +47,8 @@ heavy training offloaded to cloud GPUs.
 - [x] Assemble the Transformer block
 - [x] Stack blocks into full GPT-2 architecture
 - [x] Text generation (greedy, temperature, top-k, top-p sampling)
-- [ ] **Deep dive**: Why residual connections are critical (gradient flow)
-- [ ] **Deep dive**: Pre-norm vs post-norm architecture
+- [x] **Deep dive**: Why residual connections are critical (gradient flow)
+- [x] **Deep dive**: Pre-norm vs post-norm architecture
 
 ---
 

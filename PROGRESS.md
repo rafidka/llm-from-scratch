@@ -222,3 +222,30 @@
 
 ### Open questions
 - Next: Deep dives (residual connections, pre-norm vs post-norm) or Phase 4 (Pretraining)
+
+---
+
+## Session 9 — 2026-03-30 — GPT Architecture Deep Dives
+
+### What we covered
+- Discussed why residual connections matter: gradient flow through deep networks
+- Compared pre-norm vs post-norm architectures
+- Created gradient flow demonstration comparing both approaches
+- Observed that pre-norm gradients are 5x larger at embedding layers
+
+### Key learnings
+- Residual connections provide a "clean path" for gradients: `∂(x + sublayer(x))/∂x = 1 + ∂sublayer(x)/∂x`
+- Pre-norm keeps LayerNorm out of the residual path, preserving gradients
+- Post-norm gradients vanish at early layers — requires learning rate warmup
+- Pre-norm (GPT-2, modern transformers) trains stably without warmup
+- Demonstrated with 12-layer networks: pre-norm gradients ~5x larger at embeddings
+
+### Code written
+- `examples/model/gradient_flow_comparison.py` — Script comparing pre-norm vs post-norm gradient flow
+
+### PLAN.md items completed
+- [x] **Deep dive**: Why residual connections are critical (gradient flow)
+- [x] **Deep dive**: Pre-norm vs post-norm architecture
+
+### Open questions
+- Next: Phase 4 — Pretraining
