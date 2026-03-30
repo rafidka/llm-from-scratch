@@ -41,12 +41,12 @@ heavy training offloaded to cloud GPUs.
 
 **Effort: 3-4 sessions**
 
-- [ ] Token embeddings + absolute positional embeddings
-- [ ] LayerNorm and residual connections
-- [ ] Feed-forward network (with GELU activation)
-- [ ] Assemble the Transformer block
-- [ ] Stack blocks into full GPT-2 architecture
-- [ ] Text generation (greedy, temperature, top-k, top-p sampling)
+- [x] Token embeddings + absolute positional embeddings
+- [x] LayerNorm and residual connections
+- [x] Feed-forward network (with GELU activation)
+- [x] Assemble the Transformer block
+- [x] Stack blocks into full GPT-2 architecture
+- [x] Text generation (greedy, temperature, top-k, top-p sampling)
 - [ ] **Deep dive**: Why residual connections are critical (gradient flow)
 - [ ] **Deep dive**: Pre-norm vs post-norm architecture
 

@@ -188,3 +188,37 @@
 
 ### Open questions
 - Next: Phase 3 — GPT Architecture
+
+---
+
+## Session 8 — 2026-03-30 — GPT Architecture
+
+### What we covered
+- Implemented `GPTEmbedding` with token + positional embeddings
+- Implemented `FeedForward` network with GELU activation and dropout
+- Implemented `TransformerBlock` with pre-norm architecture (LayerNorm before sublayers)
+- Implemented `GPT` class: embeddings → transformer blocks → final LayerNorm → output projection
+- Discussed pre-norm vs post-norm: GPT-2 uses pre-norm for better gradient flow
+- Implemented `generate` method with temperature, top-k sampling, and context window truncation
+
+### Key learnings
+- Pre-norm (GPT-2): `x = x + sublayer(layer_norm(x))` — LayerNorm before sublayer
+- Post-norm (original Transformer): `x = layer_norm(x + sublayer(x))` — LayerNorm after sublayer
+- Pre-norm helps with gradient flow and training stability in deep networks
+- Output projection returns logits, not argmax — needed for cross-entropy loss during training
+- Generation stops at EOS token in production, but we use `max_new_tokens` for simplicity
+
+### Code written
+- `src/llm_from_scratch/model/embeddings.py` — `GPTEmbedding` class
+- `src/llm_from_scratch/model/transformer.py` — `FeedForward`, `TransformerBlock`, `GPT` classes
+
+### PLAN.md items completed
+- [x] Token embeddings + absolute positional embeddings
+- [x] LayerNorm and residual connections
+- [x] Feed-forward network (with GELU activation)
+- [x] Assemble the Transformer block
+- [x] Stack blocks into full GPT-2 architecture
+- [x] Text generation (greedy, temperature, top-k, top-p sampling)
+
+### Open questions
+- Next: Deep dives (residual connections, pre-norm vs post-norm) or Phase 4 (Pretraining)

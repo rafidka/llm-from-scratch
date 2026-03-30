@@ -95,4 +95,4 @@ class MultiHeadAttention(nn.Module):
         attn = scaled_dot_product_attention(q, k, v, self.causal)  # type: ignore[assignment]
         attn = attn.transpose(1, 2).contiguous().view(batch, seq_len, embed_dim)  # type: ignore[union-attr]
 
-        return self.W_o(attn)
+        return self.W_o(attn)  # output: [batch, seq_len, embed_dim]
