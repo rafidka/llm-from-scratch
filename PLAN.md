@@ -60,7 +60,9 @@ heavy training offloaded to cloud GPUs.
 - [x] Training loop with AdamW optimizer
 - [x] Learning rate scheduling (warmup + cosine decay)
 - [x] Training on a small corpus locally (MacBook MPS)
-- [ ] Evaluate with perplexity and sample generation
+- [ ] Evaluate with sample generation
+- [ ] Train a larger model on cloud GPU
+- [ ] Evaluate with perplexity
 - [ ] **Deep dive**: Gradient accumulation for effective larger batch sizes
 - [ ] **Deep dive**: Mixed precision training
 

@@ -307,3 +307,28 @@
 
 ### Open questions
 - Next: Evaluate with perplexity and sample generation
+
+---
+
+## Session 12 — 2026-04-06 — Sample Generation
+
+### What we covered
+- Added text generation to GPTTrainer — generates samples after each epoch
+- Tested generation with "To be, or not" prompt
+- Observed output quality is poor due to tiny model (2 layers, 64 dim)
+- Discussed model size vs. output quality tradeoff
+
+### Key learnings
+- Tiny model (~50K params) learns basic patterns: character names, dialogue format
+- Loss ~3.5 = perplexity ~33 → model still very uncertain
+- Need larger model (more layers, wider embeddings) for coherent text generation
+- `torch.no_grad()` during generation saves memory and speeds up inference
+
+### Code written
+- `src/llm_from_scratch/training/trainer.py` — Added `generate()` method with prompt, temperature, top_k
+
+### PLAN.md items completed
+- [x] Evaluate with sample generation
+
+### Open questions
+- Next: Train a larger model on cloud GPU
