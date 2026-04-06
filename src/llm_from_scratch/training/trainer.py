@@ -1,11 +1,13 @@
+import math
+
 import torch
 from torch import Tensor
 from torch.nn import CrossEntropyLoss
 from torch.optim import Optimizer
+from tqdm import tqdm
 
 from llm_from_scratch.data.loader import GPTDataLoader
 from llm_from_scratch.model.transformer import GPT
-from tqdm import tqdm
 
 
 class GPTTrainer:
@@ -15,6 +17,8 @@ class GPTTrainer:
         optim: Optimizer,
         loss_fn: CrossEntropyLoss,
         epochs: int,
+        max_lr: float,
+        loader: GPTDataLoader,
         device: torch.device,
     ):
         self.model = model
@@ -23,7 +27,31 @@ class GPTTrainer:
         self.epochs = epochs
         self.device = device
 
-    def train_step(self, input_ids: Tensor, target_ids: Tensor):
+        self.dataloader = loader
+        self.max_lr = max_lr
+        self.min_lr = max_lr / 10
+        self.max_steps = epochs * len(loader)
+        self.warmup_steps = self.max_steps / 10
+
+    def get_lr(
+        self,
+        step: int,
+    ) -> float:
+        if step < self.warmup_steps:
+            return self.max_lr * step / self.warmup_steps
+        # cosine decay phase
+        progress = (step - self.warmup_steps) / (self.max_steps - self.warmup_steps)
+        return self.min_lr + 0.5 * (self.max_lr - self.min_lr) * (
+            1 + math.cos(math.pi * progress)
+        )
+
+    def train_step(self, epoch: int, step: int, input_ids: Tensor, target_ids: Tensor):
+        # Set the learning rate
+        abs_step = epoch * len(self.dataloader) + step
+        lr = self.get_lr(abs_step)
+        for pg in self.optim.param_groups:
+            pg["lr"] = lr
+
         self.optim.zero_grad()
 
         logits = self.model(input_ids)  # shape [batch, seq_len, vocab_size]
@@ -33,18 +61,19 @@ class GPTTrainer:
 
         self.optim.step()
 
+        if abs_step % 50 == 0:
+            print(f"Step {abs_step}: lr={lr:.2e}, Loss: {loss:.4f}")
+
         return loss.item()
 
-    def train_epoch(self, loader: GPTDataLoader):
-        for idx, (input_ids, target_ids) in tqdm(enumerate(loader)):
+    def train_epoch(self, epoch: int):
+        for step, (input_ids, target_ids) in tqdm(enumerate(self.dataloader)):
             input_ids = input_ids.to(self.device)
             target_ids = target_ids.to(self.device)
-            loss = self.train_step(input_ids, target_ids)
-            if idx % 50 == 0:
-                print(f"Loss: {loss}")
+            self.train_step(epoch, step, input_ids, target_ids)
 
-    def train(self, loader: GPTDataLoader):
+    def train(self):
         self.model.train()  # set the model to training mode
         for epoch in range(self.epochs):
             print(f"Epoch {epoch}")
-            self.train_epoch(loader)
+            self.train_epoch(epoch)

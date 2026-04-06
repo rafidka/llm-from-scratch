@@ -280,3 +280,30 @@
 
 ### Open questions
 - Next: Learning rate scheduling (warmup + cosine decay)
+
+---
+
+## Session 11 — 2026-04-06 — Pretraining (Part 2: LR Scheduling)
+
+### What we covered
+- Implemented learning rate warmup + cosine decay schedule
+- Added GPT-2 style weight initialization (N(0, 0.02))
+- Completed full training run on Tiny Shakespeare (10 epochs)
+- Final loss: ~3.5-4.0 (perplexity ~33-55)
+
+### Key learnings
+- Warmup prevents early training instability: LR ramps from 0 to max_lr over first 10% of steps
+- Cosine decay allows fine-tuning: LR decays smoothly from max_lr to min_lr (max_lr/10)
+- GPT-2 initializes weights from N(0, 0.02) for embeddings and linear layers
+- Weight decay (0.01) provides L2 regularization during AdamW optimization
+- LR must be set before optimizer.step(), not after
+
+### Code written
+- `src/llm_from_scratch/training/trainer.py` — Added `get_lr()` method with warmup + cosine decay
+- `src/llm_from_scratch/examples/training/trainer.py` — Added `init_weights()` function for GPT-2 style init
+
+### PLAN.md items completed
+- [x] Learning rate scheduling (warmup + cosine decay)
+
+### Open questions
+- Next: Evaluate with perplexity and sample generation
