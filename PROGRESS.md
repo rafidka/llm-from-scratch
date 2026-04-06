@@ -249,3 +249,34 @@
 
 ### Open questions
 - Next: Phase 4 — Pretraining
+
+---
+
+## Session 10 — 2026-04-06 — Pretraining (Part 1)
+
+### What we covered
+- Implemented `GPTTrainer` class with training loop structure
+- Built cross-entropy loss computation for next-token prediction
+- Added `GPT.test()` factory method for small test models
+- Set up Tiny Shakespeare dataset download script
+- Discussed hyperparameter tuning: learning rate (3e-4), weight decay (0.01)
+- Training successfully runs with decreasing loss (~11 → ~5 in one epoch)
+
+### Key learnings
+- Cross-entropy loss expects logits `[batch*seq_len, vocab_size]` and targets `[batch*seq_len]`
+- AdamW default lr (0.001) is too high for LLMs; typical range is 1e-4 to 3e-4
+- Model must be moved to device via `model.to(device)` before training
+- Stride controls overlap in sliding window: smaller stride = more data but more redundancy
+- Batch size is constrained by GPU/MPS memory
+
+### Code written
+- `src/llm_from_scratch/training/trainer.py` — `GPTTrainer` class with `train_step`, `train_epoch`, `train` methods
+- `src/llm_from_scratch/examples/training/trainer.py` — Training script for Tiny Shakespeare
+- `src/llm_from_scratch/examples/data/dataset_tiny_shakespeare.py` — Dataset download and dataloader creation
+
+### PLAN.md items completed
+- [x] Cross-entropy loss for next-token prediction
+- [x] Training loop with AdamW optimizer
+
+### Open questions
+- Next: Learning rate scheduling (warmup + cosine decay)

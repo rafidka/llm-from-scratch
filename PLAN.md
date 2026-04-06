@@ -56,8 +56,8 @@ heavy training offloaded to cloud GPUs.
 
 **Effort: 3-5 sessions**
 
-- [ ] Cross-entropy loss for next-token prediction
-- [ ] Training loop with AdamW optimizer
+- [x] Cross-entropy loss for next-token prediction
+- [x] Training loop with AdamW optimizer
 - [ ] Learning rate scheduling (warmup + cosine decay)
 - [ ] Training on a small corpus locally (MacBook MPS)
 - [ ] Evaluate with perplexity and sample generation
