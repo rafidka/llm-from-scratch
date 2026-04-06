@@ -74,6 +74,23 @@ class GPT(nn.Module):
         self.ln = nn.LayerNorm(embed_dim)
         self.out_ff = nn.Linear(embed_dim, vocab_size)
 
+    @classmethod
+    def test(cls, vocab_size: int, max_seq_len: int):
+        """Create a very small GPT model for testing purposes."""
+        return GPT(
+            vocab_size=vocab_size,
+            embed_dim=64,
+            num_heads=4,
+            num_layers=2,
+            max_seq_len=max_seq_len,
+            dropout=0.0,
+        )
+
+    # TODO Create the following methods:
+    # - small()
+    # - medium()
+    # - large()
+
     def forward(self, token_ids: "Tensor") -> "Tensor":
         # token_ids: [batch, seq_len]
         if len(token_ids.shape) != 2:
@@ -82,7 +99,7 @@ class GPT(nn.Module):
         out = self.transformer_blocks(out)
         out = self.ln(out)
         logits = self.out_ff(out)
-        return logits
+        return logits  # shape [batch, seq_len, vocab_size]
 
     def generate(
         self,

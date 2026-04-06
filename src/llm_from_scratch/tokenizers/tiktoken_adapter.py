@@ -7,6 +7,10 @@ class TiktokenTokenizer(Tokenizer):
     def __init__(self, encoding_name: str = "gpt2"):
         self._encoding = tiktoken.get_encoding(encoding_name=encoding_name)
 
+    @property
+    def vocab_size(self):
+        return self._encoding.max_token_value + 1
+
     def encode(self, text: str) -> list[int]:
         return self._encoding.encode(text)
 
