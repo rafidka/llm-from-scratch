@@ -59,7 +59,7 @@ heavy training offloaded to cloud GPUs.
 - [x] Cross-entropy loss for next-token prediction
 - [x] Training loop with AdamW optimizer
 - [x] Learning rate scheduling (warmup + cosine decay)
-- [ ] Training on a small corpus locally (MacBook MPS)
+- [x] Training on a small corpus locally (MacBook MPS)
 - [ ] Evaluate with perplexity and sample generation
 - [ ] **Deep dive**: Gradient accumulation for effective larger batch sizes
 - [ ] **Deep dive**: Mixed precision training
