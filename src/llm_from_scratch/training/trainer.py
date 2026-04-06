@@ -8,12 +8,14 @@ from tqdm import tqdm
 
 from llm_from_scratch.data.loader import GPTDataLoader
 from llm_from_scratch.model.transformer import GPT
+from llm_from_scratch.tokenizers.base import Tokenizer
 
 
 class GPTTrainer:
     def __init__(
         self,
         model: GPT,
+        tokenizer: Tokenizer,
         optim: Optimizer,
         loss_fn: CrossEntropyLoss,
         epochs: int,
@@ -22,6 +24,7 @@ class GPTTrainer:
         device: torch.device,
     ):
         self.model = model
+        self.tokenizer = tokenizer
         self.optim = optim
         self.loss_fn = loss_fn
         self.epochs = epochs
@@ -72,8 +75,22 @@ class GPTTrainer:
             target_ids = target_ids.to(self.device)
             self.train_step(epoch, step, input_ids, target_ids)
 
+    @torch.no_grad()
+    def generate(self):
+        prompt = "To be, or not "
+        input_ids = (
+            torch.tensor(self.tokenizer.encode(prompt)).view(1, -1).to(self.device)
+        )
+        output_ids = self.model.generate(
+            input_ids, max_new_tokens=50, temperature=0.8, top_k=40
+        )
+        print(self.tokenizer.decode(output_ids[0].tolist()))
+
     def train(self):
-        self.model.train()  # set the model to training mode
         for epoch in range(self.epochs):
+            self.model.train()  # set the model to training mode
             print(f"Epoch {epoch}")
             self.train_epoch(epoch)
+
+            self.model.eval()
+            self.generate()
