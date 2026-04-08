@@ -332,3 +332,31 @@
 
 ### Open questions
 - Next: Train a larger model on cloud GPU
+
+---
+
+## Session 13 — 2026-04-07 — Cloud Training Setup
+
+### What we covered
+- Discussed GPT-2 model sizes (Small: 124M, Medium: 355M params)
+- Added GPT.gpt2_small() and GPT.gpt2_medium() factory methods
+- Created train_cloud.py for training on cloud GPUs
+- Switched from Wikipedia to Wikitext-103 dataset (Wikipedia deprecated in datasets lib)
+- Set up VS Code launch configuration for debugging
+
+### Key learnings
+- GPT-2 Small: 768 embed_dim, 12 layers, 12 heads, ~124M params
+- GPT-2 Medium: 1024 embed_dim, 24 layers, 16 heads, ~355M params
+- Wikitext-103 is a popular LM dataset (~500MB, cleaner than Wikipedia)
+- A100 80GB can handle batch sizes of 64-128 for Small, 32-64 for Medium
+
+### Code written
+- `src/llm_from_scratch/model/transformer.py` — Added gpt2_small() and gpt2_medium() factory methods
+- `src/llm_from_scratch/data/dataset.py` — Added from_tokens() class method for pre-tokenized data
+- `src/llm_from_scratch/examples/training/train_cloud.py` — Cloud training script with checkpointing
+
+### PLAN.md items completed
+- None yet (cloud training script ready, needs to be run)
+
+### Open questions
+- Next: Run training on cloud GPU (RunPod/vast.ai)
