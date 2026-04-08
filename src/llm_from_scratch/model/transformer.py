@@ -86,6 +86,30 @@ class GPT(nn.Module):
             dropout=0.0,
         )
 
+    @classmethod
+    def gpt2_small(cls, vocab_size: int, max_seq_len: int = 1024):
+        """GPT-2 Small: 124M parameters"""
+        return GPT(
+            vocab_size,
+            embed_dim=768,
+            num_heads=12,
+            num_layers=12,
+            max_seq_len=max_seq_len,
+            dropout=0.1,
+        )
+
+    @classmethod
+    def gpt2_medium(cls, vocab_size: int, max_seq_len: int = 1024):
+        """GPT-2 Medium: 355M parameters"""
+        return GPT(
+            vocab_size,
+            embed_dim=1024,
+            num_heads=16,
+            num_layers=24,
+            max_seq_len=max_seq_len,
+            dropout=0.1,
+        )
+
     # TODO Create the following methods:
     # - small()
     # - medium()

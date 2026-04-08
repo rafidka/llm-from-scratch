@@ -30,6 +30,20 @@ class LLMDataset(Dataset[tuple[Tensor, Tensor]]):
             0,
         )
 
+    @classmethod
+    def from_tokens(cls, tokens: list[int], max_length: int, stride: int):
+        """Create dataset from pre-tokenized tokens."""
+        dataset = cls.__new__(cls)
+        dataset.text = ""
+        dataset.tokens = tokens
+        dataset.max_length = max_length
+        dataset.stride = stride
+        dataset._len = max(
+            floor((len(tokens) - max_length - 1) / stride) + 1,
+            0,
+        )
+        return dataset
+
     def __len__(self) -> int:
         return self._len
 

@@ -14,3 +14,7 @@ wheels/
 
 # Downloaded data
 /data/
+
+# Model checkpoints
+checkpoints/
+.env
