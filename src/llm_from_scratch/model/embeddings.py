@@ -10,12 +10,12 @@ if TYPE_CHECKING:
 class GPTEmbedding(nn.Module):
     def __init__(self, vocab_size: int, embed_dim: int, max_seq_len: int):
         super().__init__()
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.token = nn.Embedding(vocab_size, embed_dim)
         self.positional = nn.Embedding(max_seq_len, embed_dim)
 
     def forward(self, token_ids: "Tensor") -> "Tensor":
         _batch, seq_len = token_ids.shape
-        token_emb = self.embedding(token_ids)
+        token_emb = self.token(token_ids)
 
         pos_ids = torch.arange(seq_len, device=token_ids.device)
         pos_emb = self.positional(pos_ids)

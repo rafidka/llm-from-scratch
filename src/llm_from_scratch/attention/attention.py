@@ -69,12 +69,12 @@ class MultiHeadAttention(nn.Module):
         # projecting from embed_dim into head_dim. However, to make the computation more
         # efficient, we just create one big matrix, and then partition the output. See
         # the forward() implementation for more info.
-        self.W_q = nn.Linear(embed_dim, embed_dim, bias=False)
-        self.W_k = nn.Linear(embed_dim, embed_dim, bias=False)
-        self.W_v = nn.Linear(embed_dim, embed_dim, bias=False)
+        self.W_q = nn.Linear(embed_dim, embed_dim)
+        self.W_k = nn.Linear(embed_dim, embed_dim)
+        self.W_v = nn.Linear(embed_dim, embed_dim)
 
         # Output projection
-        self.W_o = nn.Linear(embed_dim, embed_dim, bias=False)
+        self.W_o = nn.Linear(embed_dim, embed_dim)
 
     def forward(self, x: "Tensor") -> "Tensor":
         # x: [batch, seq_len, embed_dim]

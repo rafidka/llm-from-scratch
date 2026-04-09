@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING
 
 import torch
 from torch import nn
+from transformers import GPT2LMHeadModel
 
 from llm_from_scratch.attention.attention import MultiHeadAttention
 from llm_from_scratch.model.embeddings import GPTEmbedding
@@ -72,7 +73,7 @@ class GPT(nn.Module):
             ]
         )
         self.ln = nn.LayerNorm(embed_dim)
-        self.out_ff = nn.Linear(embed_dim, vocab_size)
+        self.out_ff = nn.Linear(embed_dim, vocab_size, bias=False)
 
     @classmethod
     def test(cls, vocab_size: int, max_seq_len: int):
@@ -111,9 +112,77 @@ class GPT(nn.Module):
         )
 
     # TODO Create the following methods:
-    # - small()
-    # - medium()
     # - large()
+
+    @classmethod
+    def gpt2_large(cls, vocab_size: int, max_seq_len: int = 1024):
+        """GPT-2 Large: 774M parameters"""
+        return GPT(
+            vocab_size,
+            embed_dim=1280,
+            num_heads=20,
+            num_layers=36,
+            max_seq_len=max_seq_len,
+            dropout=0.1,
+        )
+
+    @classmethod
+    def from_pretrained(cls, model_name: str, max_seq_len: int = 1024):
+        """
+        Load pretrained weights from HuggingFace.
+
+        Supported: "gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"
+        """
+
+        if model_name not in ["gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"]:
+            raise ValueError(
+                f"Unsupported model_name '{model_name}'. Supported: 'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'."
+            )
+
+        # Download and load HuggingFace model
+        hf_model = GPT2LMHeadModel.from_pretrained(model_name)  # type: ignore
+
+        # Get config
+        config = hf_model.config
+
+        # Create our model with matching architecture
+        model = cls(
+            vocab_size=config.vocab_size,
+            embed_dim=config.n_embd,
+            num_heads=config.n_head,
+            num_layers=config.n_layer,
+            max_seq_len=max_seq_len,
+            dropout=0.0,  # No dropout during inference
+        )
+
+        # Map weights (you'll implement this)
+        model._load_weights(hf_model)
+
+        return model
+
+    def _load_weights(self, hf_model: GPT2LMHeadModel):
+        # fmt: off
+        with torch.no_grad():
+            self.embedding.token.weight.copy_(hf_model.transformer.wte.weight)
+            self.embedding.positional.weight.copy_(hf_model.transformer.wpe.weight)
+            for i in range(self.num_layers):
+                self.transformer_blocks[i].ln1.load_state_dict(hf_model.transformer.h[i].ln_1.state_dict())
+                self.transformer_blocks[i].attn.W_q.weight.copy_(hf_model.transformer.h[i].attn.c_attn.weight[:, : self.embed_dim].t())
+                self.transformer_blocks[i].attn.W_q.bias.copy_(hf_model.transformer.h[i].attn.c_attn.bias[: self.embed_dim].t())
+                self.transformer_blocks[i].attn.W_k.weight.copy_(hf_model.transformer.h[i].attn.c_attn.weight[:, self.embed_dim : 2 * self.embed_dim].t())
+                self.transformer_blocks[i].attn.W_k.bias.copy_(hf_model.transformer.h[i].attn.c_attn.bias[self.embed_dim : 2 * self.embed_dim])
+                self.transformer_blocks[i].attn.W_v.weight.copy_(hf_model.transformer.h[i].attn.c_attn.weight[:, 2 * self.embed_dim :].t())
+                self.transformer_blocks[i].attn.W_v.bias.copy_(hf_model.transformer.h[i].attn.c_attn.bias[2 * self.embed_dim :])
+                self.transformer_blocks[i].attn.W_o.weight.copy_(hf_model.transformer.h[i].attn.c_proj.weight.t())
+                self.transformer_blocks[i].attn.W_o.bias.copy_(hf_model.transformer.h[i].attn.c_proj.bias)
+                self.transformer_blocks[i].ln2.load_state_dict(hf_model.transformer.h[i].ln_2.state_dict())
+                self.transformer_blocks[i].ff.ff1.weight.copy_(hf_model.transformer.h[i].mlp.c_fc.weight.t())
+                self.transformer_blocks[i].ff.ff1.bias.copy_(hf_model.transformer.h[i].mlp.c_fc.bias)
+                self.transformer_blocks[i].ff.ff2.weight.copy_(hf_model.transformer.h[i].mlp.c_proj.weight.t())
+                self.transformer_blocks[i].ff.ff2.bias.copy_(hf_model.transformer.h[i].mlp.c_proj.bias)
+            self.ln.load_state_dict(hf_model.transformer.ln_f.state_dict())
+            self.out_ff.weight.copy_(hf_model.lm_head.weight)
+        # fmt: on
 
     def forward(self, token_ids: "Tensor") -> "Tensor":
         # token_ids: [batch, seq_len]
