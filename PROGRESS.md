@@ -360,3 +360,24 @@
 
 ### Open questions
 - Next: Run training on cloud GPU (RunPod/vast.ai)
+
+---
+
+## Session 14 — 2026-04-07 — Cloud Training (RTX 3090)
+
+### What we covered
+- Running train_cloud.py on RTX 3090 GPU
+- Using Wikitext-103 dataset for training
+- Training in progress
+
+### Key learnings
+- (To be filled after training completes)
+
+### Code written
+- (Training script already created in Session 13)
+
+### PLAN.md items completed
+- [x] Train a larger model on cloud GPU (in progress)
+
+### Open questions
+- Next: Evaluate with perplexity once training completes
