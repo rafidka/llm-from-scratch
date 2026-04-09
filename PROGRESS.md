@@ -381,3 +381,39 @@
 
 ### Open questions
 - Next: Evaluate with perplexity once training completes
+
+---
+
+## Session 15 — 2026-04-09 — Loading Pretrained GPT-2 Weights
+
+### What we covered
+- Analyzed HuggingFace GPT-2 architecture vs our implementation
+- Mapped weight names between architectures (wte/wpe, c_attn/c_proj, etc.)
+- Handled Conv1D transpose (HuggingFace stores weights as [in, out], we use [out, in])
+- Implemented GPT.from_pretrained() to load weights from HuggingFace
+- Verified identical outputs between our model and HuggingFace GPT-2
+
+### Key learnings
+- HuggingFace GPT-2 uses Conv1D which stores weights transposed vs nn.Linear
+- GPT-2 combines Q, K, V into single c_attn tensor (shape [768, 2304]) vs our separate W_q, W_k, W_v
+- Pre-norm architecture matches between our implementation and HuggingFace
+- Weight tying: HuggingFace shares wte and lm_head weights
+- Bias handling: GPT-2 has biases in attention layers (our original impl had bias=False)
+- temperature=0 for greedy decoding produces deterministic, identical outputs
+
+### Code written
+- `src/llm_from_scratch/model/transformer.py` — Added from_pretrained() and _load_weights()
+- `src/llm_from_scratch/model/transformer.py` — Added gpt2_large() factory method
+- `src/llm_from_scratch/attention/attention.py` — Added bias to W_q, W_k, W_v, W_o
+- `src/llm_from_scratch/model/embeddings.py` — Fixed attribute name (embedding -> token)
+- `src/llm_from_scratch/examples/model/load_pretrianed_ours.py` — Test script for our model
+- `src/llm_from_scratch/examples/model/load_pretrianed_hf.py` — Test script for HuggingFace model
+
+### PLAN.md items completed
+- [x] Understand GPT-2 weight layout from OpenAI/HuggingFace
+- [x] Map weights to our architecture
+- [x] Verify correctness via text generation
+- [x] Compare our outputs to HuggingFace's GPT-2
+
+### Open questions
+- Next: Evaluate perplexity on held-out data

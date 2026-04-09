@@ -71,10 +71,10 @@ heavy training offloaded to cloud GPUs.
 
 **Effort: 1-2 sessions**
 
-- [ ] Understand GPT-2 weight layout from OpenAI/HuggingFace
-- [ ] Map weights to our architecture
-- [ ] Verify correctness via text generation
-- [ ] Compare our outputs to HuggingFace's GPT-2
+- [x] Understand GPT-2 weight layout from OpenAI/HuggingFace
+- [x] Map weights to our architecture
+- [x] Verify correctness via text generation
+- [x] Compare our outputs to HuggingFace's GPT-2
 - [ ] Evaluate perplexity on held-out data
 
 ---
