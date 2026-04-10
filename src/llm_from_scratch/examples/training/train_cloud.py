@@ -9,7 +9,7 @@ from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 
-from llm_from_scratch.data.dataset import LLMDataset
+from llm_from_scratch.data.dataset import StreamingLLMDataset
 from llm_from_scratch.model.transformer import GPT
 from llm_from_scratch.tokenizers.tiktoken_adapter import TiktokenTokenizer
 
@@ -19,7 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model_size", type=str, default="small", choices=["small", "medium"]
     )
-    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--epochs", type=int, default=1, help="Number of passes through the dataset")
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight_decay", type=float, default=0.01)
@@ -31,6 +31,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log_every", type=int, default=100)
     parser.add_argument(
         "--subset_size", type=int, default=None, help="Use subset of data for debugging"
+    )
+    parser.add_argument(
+        "--generate_every",
+        type=int,
+        default=100,
+        help="Generate sample text every N steps",
+    )
+    parser.add_argument(
+        "--generation_prompt",
+        type=str,
+        default="I am going to the bank to",
+        help="Prompt for sample generation",
+    )
+    parser.add_argument(
+        "--generation_tokens",
+        type=int,
+        default=100,
+        help="Number of tokens to generate in samples",
     )
     return parser.parse_args()
 
@@ -67,30 +85,19 @@ def load_wikipedia_data(
     max_seq_len: int,
     stride: int,
     batch_size: int,
-    subset_size: int | None = None,
 ) -> DataLoader[tuple[torch.Tensor, torch.Tensor]]:
-    print("Loading Wikitext-103 dataset...")
-    dataset = load_dataset("wikitext", "wikitext-103-raw-v1", split="train")
+    print("Loading Wikitext-103 dataset (streaming)...")
+    dataset = load_dataset("wikitext", "wikitext-103-raw-v1", split="train", streaming=True)
 
-    if subset_size:
-        dataset = dataset.select(range(subset_size))  # type: ignore[union-attr]
-        print(f"Using subset of {subset_size} examples")
+    streaming_dataset = StreamingLLMDataset(
+        dataset, tokenizer, max_seq_len, stride
+    )
 
-    def tokenize(example: dict[str, str]) -> dict[str, list[int]]:
-        return {"input_ids": tokenizer.encode(example["text"])}
-
-    print("Tokenizing Wikitext-103...")
-    tokenized = dataset.map(tokenize, remove_columns=dataset.column_names)  # type: ignore[union-attr]
-
-    all_tokens: list[int] = []
-    for example in tokenized:  # type: ignore[assignment]
-        all_tokens.extend(example["input_ids"])  # type: ignore[misc]
-
-    print(f"Total tokens: {len(all_tokens):,}")
-
-    llm_dataset = LLMDataset.from_tokens(all_tokens, max_seq_len, stride)
     dataloader = DataLoader(
-        llm_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True
+        streaming_dataset,
+        batch_size=batch_size,
+        num_workers=0,
+        pin_memory=True,
     )
 
     return dataloader
@@ -119,6 +126,26 @@ def save_checkpoint(
     print(f"Saved checkpoint to {checkpoint_path}")
 
 
+def generate_sample(
+    model: GPT,
+    tokenizer: TiktokenTokenizer,
+    device: torch.device,
+    prompt: str,
+    max_new_tokens: int,
+) -> None:
+    model.eval()
+    with torch.no_grad():
+        input_ids = torch.tensor([tokenizer.encode(prompt)], device=device)
+        output_ids = model.generate(input_ids, max_new_tokens=max_new_tokens, temperature=1.0)
+        generated_tokens = output_ids[0].tolist()  # type: ignore[assignment]
+        generated_text = tokenizer.decode(generated_tokens)  # type: ignore[arg-type]
+        print("\n--- Sample Generation ---")
+        print(f"Prompt: {prompt}")
+        print(f"Generated: {generated_text}")
+        print("-------------------------\n")
+    model.train()
+
+
 def train(args: argparse.Namespace) -> None:
     device = torch.device(
         "cuda"
@@ -138,18 +165,21 @@ def train(args: argparse.Namespace) -> None:
     print(f"Model: {args.model_size}, Parameters: {num_params:,}")
 
     dataloader = load_wikipedia_data(
-        tokenizer, args.max_seq_len, args.stride, args.batch_size, args.subset_size
+        tokenizer, args.max_seq_len, args.stride, args.batch_size
     )
 
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     loss_fn = CrossEntropyLoss()
 
-    max_steps = args.epochs * len(dataloader)
+    WIKITEXT_103_TOKENS_ESTIMATE = 100_000_000
+    samples_per_epoch = WIKITEXT_103_TOKENS_ESTIMATE // args.stride
+    steps_per_epoch = samples_per_epoch // args.batch_size
+    max_steps = args.epochs * steps_per_epoch
     warmup_steps = int(max_steps * args.warmup_ratio)
     min_lr = args.lr / 10
     checkpoint_dir = Path(args.checkpoint_dir)
 
-    print(f"Training for {args.epochs} epochs, {max_steps} steps")
+    print(f"Training for {args.epochs} epochs (~{max_steps} steps)")
     print(f"Warmup steps: {warmup_steps}, Batch size: {args.batch_size}")
 
     global_step = 0
@@ -183,6 +213,11 @@ def train(args: argparse.Namespace) -> None:
                 )
                 print(
                     f"Epoch {epoch} | Step {global_step} | LR {lr:.2e} | Loss {last_loss:.4f} | Avg Loss {avg_loss:.4f}"
+                )
+
+            if args.generate_every > 0 and global_step % args.generate_every == 0 and global_step > 0:
+                generate_sample(
+                    model, tokenizer, device, args.generation_prompt, args.generation_tokens
                 )
 
             if global_step % args.checkpoint_every == 0 and global_step > 0:
