@@ -75,7 +75,7 @@ heavy training offloaded to cloud GPUs.
 - [x] Map weights to our architecture
 - [x] Verify correctness via text generation
 - [x] Compare our outputs to HuggingFace's GPT-2
-- [ ] Evaluate perplexity on held-out data
+- [x] Evaluate perplexity on held-out data
 
 ---
 

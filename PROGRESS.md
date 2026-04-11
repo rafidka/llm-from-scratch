@@ -417,3 +417,34 @@
 
 ### Open questions
 - Next: Evaluate perplexity on held-out data
+
+---
+
+## Session 16 — 2026-04-09 — Perplexity Evaluation
+
+### What we covered
+- Implemented evaluate_perplexity() function for our model and HuggingFace model
+- Investigated perplexity discrepancies and tokenizer mismatch issues
+- Discovered context length affects perplexity significantly
+
+### Key learnings
+- Perplexity = exp(average cross-entropy loss), standard LM evaluation metric
+- **Context length matters**: Longer sequences → lower perplexity (more context = better predictions)
+  - 128 tokens: ~45-60 perplexity
+  - 256 tokens: ~35-50 perplexity
+  - 1024 tokens: ~22-30 perplexity (GPT-2's training context)
+- **Tokenizer must match**: GPT-2 pretrained weights require GPT-2's tokenizer (vocab size 50257)
+- **HuggingFace label handling**: GPT2LMHeadModel expects labels=input_ids (unshifted), shifts internally
+- Our LLMDataset pre-shifts targets, which works for our model but needs adjustment for HF models
+
+### Code written
+- `src/llm_from_scratch/training/evaluate.py` — evaluate_perplexity() for our model
+- `src/llm_from_scratch/training/evaluate_hf.py` — evaluate_perplexity() for HuggingFace models
+- `src/llm_from_scratch/examples/pretrained/evaluate_gpt2.py` — Script to evaluate our model
+- `src/llm_from_scratch/examples/pretrained/evaluate_gpt2_hf.py` — Script to evaluate HF model
+
+### PLAN.md items completed
+- [x] Evaluate perplexity on held-out data
+
+### Open questions
+- None — Phase 5 complete!
