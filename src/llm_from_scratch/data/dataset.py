@@ -35,20 +35,6 @@ class LLMDataset(Dataset[tuple[Tensor, Tensor]]):
             0,
         )
 
-    @classmethod
-    def from_tokens(cls, tokens: list[int], max_length: int, stride: int):
-        """Create dataset from pre-tokenized tokens."""
-        dataset = cls.__new__(cls)
-        dataset.text = ""
-        dataset.tokens = tokens
-        dataset.max_length = max_length
-        dataset.stride = stride
-        dataset._len = max(
-            floor((len(tokens) - max_length - 1) / stride) + 1,
-            0,
-        )
-        return dataset
-
     def __len__(self) -> int:
         return self._len
 
@@ -64,7 +50,23 @@ class LLMDataset(Dataset[tuple[Tensor, Tensor]]):
 
 
 class StreamingLLMDataset(IterableDataset[tuple[Tensor, Tensor]]):
-    """Dataset that streams text from a HuggingFace dataset and yields samples on-the-fly."""
+    """Dataset that streams text from a HuggingFace dataset and yields samples on-the-fly.
+
+    This class implements an iterable dataset that processes text data from a HuggingFace
+    dataset in a streaming fashion. It tokenizes the text, maintains a buffer of tokens,
+    and yields input-target pairs for language model training with a specified stride.
+
+    Attributes:
+        hf_dataset: The HuggingFace dataset object to stream text from.
+        tokenizer: The tokenizer instance used to encode text into tokens.
+        max_length: The maximum length of each input sequence.
+        stride: The stride for sliding window sampling over the token buffer.
+        buffer_limit: The maximum size of the token buffer before trimming (default: 50000).
+
+    Yields:
+        tuple[Tensor, Tensor]: A tuple containing the input tensor and the target tensor
+        for each sample, where the target is the shifted version of the input.
+    """
 
     def __init__(
         self,
@@ -72,11 +74,13 @@ class StreamingLLMDataset(IterableDataset[tuple[Tensor, Tensor]]):
         tokenizer: Tokenizer,
         max_length: int,
         stride: int,
+        buffer_limit: int = 50000,
     ):
         self.hf_dataset = hf_dataset
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.stride = stride
+        self.buffer_limit = buffer_limit
 
     def __iter__(self) -> Iterator[tuple[Tensor, Tensor]]:
         token_buffer: list[int] = []
@@ -96,6 +100,6 @@ class StreamingLLMDataset(IterableDataset[tuple[Tensor, Tensor]]):
                 yield tensor(input_ids), tensor(target_ids)
                 pos += self.stride
 
-            if pos > 50000:
+            if pos > self.buffer_limit:
                 token_buffer = token_buffer[pos:]
                 pos = 0

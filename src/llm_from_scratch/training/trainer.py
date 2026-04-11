@@ -6,7 +6,7 @@ from torch.nn import CrossEntropyLoss
 from torch.optim import Optimizer
 from tqdm import tqdm
 
-from llm_from_scratch.data.loader import GPTDataLoader
+from llm_from_scratch.data.loader import LLMDataLoader
 from llm_from_scratch.model.transformer import GPT
 from llm_from_scratch.tokenizers.base import Tokenizer
 
@@ -20,7 +20,7 @@ class GPTTrainer:
         loss_fn: CrossEntropyLoss,
         epochs: int,
         max_lr: float,
-        loader: GPTDataLoader,
+        loader: LLMDataLoader,
         device: torch.device,
     ):
         self.model = model

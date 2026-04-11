@@ -19,7 +19,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model_size", type=str, default="small", choices=["small", "medium"]
     )
-    parser.add_argument("--epochs", type=int, default=1, help="Number of passes through the dataset")
+    parser.add_argument(
+        "--epochs", type=int, default=1, help="Number of passes through the dataset"
+    )
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight_decay", type=float, default=0.01)
@@ -64,9 +66,9 @@ def init_weights(module: nn.Module) -> None:
 
 def create_model(model_size: str, vocab_size: int, max_seq_len: int) -> GPT:
     if model_size == "small":
-        return GPT.gpt2_small(vocab_size, max_seq_len)
+        return GPT.small(vocab_size, max_seq_len)
     elif model_size == "medium":
-        return GPT.gpt2_medium(vocab_size, max_seq_len)
+        return GPT.medium(vocab_size, max_seq_len)
     else:
         raise ValueError(f"Unknown model size: {model_size}")
 
@@ -87,11 +89,11 @@ def load_wikipedia_data(
     batch_size: int,
 ) -> DataLoader[tuple[torch.Tensor, torch.Tensor]]:
     print("Loading Wikitext-103 dataset (streaming)...")
-    dataset = load_dataset("wikitext", "wikitext-103-raw-v1", split="train", streaming=True)
-
-    streaming_dataset = StreamingLLMDataset(
-        dataset, tokenizer, max_seq_len, stride
+    dataset = load_dataset(
+        "wikitext", "wikitext-103-raw-v1", split="train", streaming=True
     )
+
+    streaming_dataset = StreamingLLMDataset(dataset, tokenizer, max_seq_len, stride)
 
     dataloader = DataLoader(
         streaming_dataset,
@@ -136,7 +138,9 @@ def generate_sample(
     model.eval()
     with torch.no_grad():
         input_ids = torch.tensor([tokenizer.encode(prompt)], device=device)
-        output_ids = model.generate(input_ids, max_new_tokens=max_new_tokens, temperature=1.0)
+        output_ids = model.generate(
+            input_ids, max_new_tokens=max_new_tokens, temperature=1.0
+        )
         generated_tokens = output_ids[0].tolist()  # type: ignore[assignment]
         generated_text = tokenizer.decode(generated_tokens)  # type: ignore[arg-type]
         print("\n--- Sample Generation ---")
@@ -215,9 +219,17 @@ def train(args: argparse.Namespace) -> None:
                     f"Epoch {epoch} | Step {global_step} | LR {lr:.2e} | Loss {last_loss:.4f} | Avg Loss {avg_loss:.4f}"
                 )
 
-            if args.generate_every > 0 and global_step % args.generate_every == 0 and global_step > 0:
+            if (
+                args.generate_every > 0
+                and global_step % args.generate_every == 0
+                and global_step > 0
+            ):
                 generate_sample(
-                    model, tokenizer, device, args.generation_prompt, args.generation_tokens
+                    model,
+                    tokenizer,
+                    device,
+                    args.generation_prompt,
+                    args.generation_tokens,
                 )
 
             if global_step % args.checkpoint_every == 0 and global_step > 0:

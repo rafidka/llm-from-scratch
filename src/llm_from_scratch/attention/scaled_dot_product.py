@@ -14,13 +14,25 @@ def scaled_dot_product_attention(
     causal: bool,
     return_attn_weights: bool = False,
 ) -> Tensor | tuple[Tensor, Tensor]:
-    # q/k/v: [batch, seq_len, embed_dim] or [seq_len, embed_dim]
-    # scores: [..., seq_len, seq_len]
-    # attn_weights: [..., seq_len, seq_len]
-    # output: [..., seq_len, embed_dim]
+    """
+    Implementation of the scaled dot product as in the "Attention is All You Need" paper.
 
+    Args:
+        q, k v: Well known. Their shapes should be either [batch, seq_len, embed_dim] or
+            [seq_len, embed_dim].
+        causal: Whether to calculate bi-directional attention, or just attend to
+            previous tokens.
+        return_attn_weights: Whether to return the attention weights as well, or just
+            the output (after applying the attention on v.)
+    """
+    # q/k/v: [batch, seq_len, embed_dim] or [seq_len, embed_dim]
+
+    # scores: [..., seq_len, seq_len]
     scores = q @ k.transpose(-1, -2)
     if causal:
+        # If the attention is causal, each token only attends to previous tokens.
+        # To achieve this, we create a mask to fill out the relevant attention scores
+        # to -inf.
         seq_len = k.shape[-2]
         mask = torch.triu(
             torch.ones(seq_len, seq_len, device=q.device, dtype=q.dtype),
@@ -28,9 +40,11 @@ def scaled_dot_product_attention(
         ).bool()
         scores = scores.masked_fill(mask, float("-inf"))
 
+    # attn_weights: [..., seq_len, seq_len]
     embed_dim = k.shape[-1]
     attn_weights = torch.softmax(scores / sqrt(embed_dim), dim=-1)
 
+    # output: [..., seq_len, embed_dim]
     output = attn_weights @ v
 
     if return_attn_weights:
@@ -39,6 +53,10 @@ def scaled_dot_product_attention(
 
 
 class SingleHeadAttention(nn.Module):
+    """
+    A wrapper layer around the scaled_dot_product_attention function (single head.)
+    """
+
     def __init__(self, embed_dim: int, causal: bool):
         super().__init__()
         self.W_q = nn.Linear(embed_dim, embed_dim, bias=False)

@@ -3,7 +3,7 @@ from torch import nn
 from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
 
-from llm_from_scratch.data.loader import GPTDataLoader
+from llm_from_scratch.data.loader import LLMDataLoader
 from llm_from_scratch.examples.data.dataset_tiny_shakespeare import get_dataloader
 from llm_from_scratch.model.transformer import GPT
 from llm_from_scratch.tokenizers.base import Tokenizer
@@ -36,9 +36,9 @@ def create_trainer(
     epochs: int,
     lr: float,
     weight_decay: float,
-    dl: GPTDataLoader,
+    dl: LLMDataLoader,
 ):
-    model = GPT.test(vocab_size, max_seq_len)
+    model = GPT.tiny(vocab_size, max_seq_len)
     model.apply(init_weights)
     model.to(device)
     optim = AdamW(model.parameters(), weight_decay=weight_decay)

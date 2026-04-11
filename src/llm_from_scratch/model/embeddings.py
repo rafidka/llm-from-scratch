@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 
-class GPTEmbedding(nn.Module):
+class GPTEmbeddings(nn.Module):
     def __init__(self, vocab_size: int, embed_dim: int, max_seq_len: int):
         super().__init__()
         self.token = nn.Embedding(vocab_size, embed_dim)
