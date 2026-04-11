@@ -1,9 +1,10 @@
 import torch
 
-from llm_from_scratch.examples.training.train_cloud import load_wikipedia_data
 from llm_from_scratch.model.pretrained import load_pretrained
 from llm_from_scratch.tokenizers.tiktoken_adapter import TiktokenTokenizer
 from llm_from_scratch.training.evaluation import evaluate_perplexity
+
+from .train_cloud import load_wikipedia_data
 
 tokenizer = TiktokenTokenizer()
 model = load_pretrained("gpt2", max_seq_len=1024)

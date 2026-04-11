@@ -4,11 +4,12 @@ from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
 
 from llm_from_scratch.data.loader import LLMDataLoader
-from llm_from_scratch.examples.data.dataset_tiny_shakespeare import get_dataloader
 from llm_from_scratch.model.transformer import GPT
 from llm_from_scratch.tokenizers.base import Tokenizer
 from llm_from_scratch.tokenizers.tiktoken_adapter import TiktokenTokenizer
 from llm_from_scratch.training.trainer import GPTTrainer
+
+from ..data.dataset_tiny_shakespeare import get_dataloader
 
 device = (
     torch.device("cuda")
