@@ -16,7 +16,8 @@ import torch
 from torch import nn
 from transformers import GPT2LMHeadModel
 
-from llm_from_scratch.model.transformer import GPT, TransformerBlock
+from llm_from_scratch.model.causallm import GPTForCausalLM
+from llm_from_scratch.model.base import TransformerBlock
 
 
 SUPPORTED_MODELS = ["gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"]
@@ -40,7 +41,7 @@ class _FakeLinear:
     bias: torch.Tensor
 
 
-def load_pretrained(model_name: str, max_seq_len: int = 1024) -> GPT:
+def load_pretrained(model_name: str, max_seq_len: int = 1024) -> GPTForCausalLM:
     """
     Load a pretrained GPT model from HuggingFace.
 
@@ -63,7 +64,7 @@ def load_pretrained(model_name: str, max_seq_len: int = 1024) -> GPT:
     hf_model = GPT2LMHeadModel.from_pretrained(model_name)
     config = hf_model.config
 
-    model = GPT(
+    model = GPTForCausalLM(
         vocab_size=config.vocab_size,
         embed_dim=config.n_embd,
         num_heads=config.n_head,
@@ -136,7 +137,7 @@ def _extract_qkv(
     return q, k, v
 
 
-def _load_weights(model: GPT, hf_model: GPT2LMHeadModel) -> None:
+def _load_weights(model: GPTForCausalLM, hf_model: GPT2LMHeadModel) -> None:
     """
     Load weights from HuggingFace GPT2LMHeadModel into our GPT model.
 
@@ -169,4 +170,4 @@ def _load_weights(model: GPT, hf_model: GPT2LMHeadModel) -> None:
             _copy_linear(our_block.ff.ff2, hf_block.mlp.c_proj, transpose=True)
 
         _copy_layernorm(model.ln, hf.ln_f)
-        model.out_ff.weight.copy_(hf_model.lm_head.weight)
+        model.lm_head.weight.copy_(hf_model.lm_head.weight)

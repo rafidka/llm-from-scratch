@@ -6,11 +6,11 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import GPT2LMHeadModel
 
-from llm_from_scratch.model.transformer import GPT
+from llm_from_scratch.model.causallm import GPTForCausalLM
 
 
 def evaluate_perplexity(
-    model: GPT,
+    model: GPTForCausalLM,
     dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
     device: torch.device,
     max_steps: int | None = None,

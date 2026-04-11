@@ -11,8 +11,6 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from llm_from_scratch.model.transformer import GPT
-
 
 class PostNormTransformerBlock(nn.Module):
     """Post-norm: LayerNorm AFTER residual connection (original Transformer)."""

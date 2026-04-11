@@ -1,6 +1,6 @@
 import torch
 
-from llm_from_scratch.model.transformer import GPT
+from llm_from_scratch.model.causallm import GPTForCausalLM
 
 input_ids = torch.randint(0, 10, (3, 15))
 print("input_ids", input_ids.shape)
@@ -8,7 +8,7 @@ print("input_ids", input_ids.shape)
 temperature = 1.0
 top_k = 11
 
-gpt = GPT(1000, 64, 8, 8, 32, 0.1)
+gpt = GPTForCausalLM(1000, 64, 8, 8, 32, 0.1)
 logits = gpt.forward(input_ids)
 print("logits", logits.shape)
 last_logit = logits[:, -1, :]

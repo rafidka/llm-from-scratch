@@ -1,6 +1,5 @@
 from typing import TYPE_CHECKING
 
-import torch
 from torch import nn
 
 from llm_from_scratch.attention.scaled_dot_product import MultiHeadAttention
@@ -72,12 +71,11 @@ class GPT(nn.Module):
             ]
         )
         self.ln = nn.LayerNorm(embed_dim)
-        self.out_ff = nn.Linear(embed_dim, vocab_size, bias=False)
 
     @classmethod
     def tiny(cls, vocab_size: int, max_seq_len: int):
         """Create a very small GPT model for testing purposes."""
-        return GPT(
+        return cls(
             vocab_size=vocab_size,
             embed_dim=64,
             num_heads=4,
@@ -89,7 +87,7 @@ class GPT(nn.Module):
     @classmethod
     def small(cls, vocab_size: int, max_seq_len: int = 1024):
         """GPT-2 Small: 124M parameters"""
-        return GPT(
+        return cls(
             vocab_size,
             embed_dim=768,
             num_heads=12,
@@ -101,7 +99,7 @@ class GPT(nn.Module):
     @classmethod
     def medium(cls, vocab_size: int, max_seq_len: int = 1024):
         """GPT-2 Medium: 355M parameters"""
-        return GPT(
+        return cls(
             vocab_size,
             embed_dim=1024,
             num_heads=16,
@@ -113,7 +111,7 @@ class GPT(nn.Module):
     @classmethod
     def large(cls, vocab_size: int, max_seq_len: int = 1024):
         """GPT-2 Large: 774M parameters"""
-        return GPT(
+        return cls(
             vocab_size,
             embed_dim=1280,
             num_heads=20,
@@ -129,43 +127,4 @@ class GPT(nn.Module):
         out = self.embedding(token_ids)
         out = self.transformer_blocks(out)
         out = self.ln(out)
-        logits = self.out_ff(out)
-        return logits  # shape [batch, seq_len, vocab_size]
-
-    def generate(
-        self,
-        token_ids: "Tensor",
-        max_new_tokens: int,
-        temperature: float = 1.0,
-        top_k: int | None = None,
-    ):
-        # token_ids: [batch, seq_len]
-        for _ in range(max_new_tokens):
-            if token_ids.shape[-1] >= self.max_seq_len:
-                token_ids = token_ids[:, -self.max_seq_len :]
-
-            logits = self.forward(token_ids)
-            last_logit = logits[:, -1, :]
-
-            if temperature == 0:
-                # Temperature is zero; use greedy sampling.
-                next_tokens = last_logit.argmax(dim=-1, keepdim=True)
-                token_ids = torch.cat((token_ids, next_tokens), dim=-1)
-                continue
-
-            # Apply temperature and softmax to find probs.
-            probs = torch.softmax(last_logit / temperature, dim=-1)
-
-            if top_k:
-                # top_k specified; apply it.
-                top_k_probs, top_k_indices = torch.topk(probs, k=top_k, dim=-1)
-
-                next_tokens = top_k_indices.gather(
-                    -1,  # dim
-                    torch.multinomial(top_k_probs, num_samples=1),
-                )
-                token_ids = torch.cat((token_ids, next_tokens), dim=-1)
-            else:
-                next_tokens = torch.multinomial(probs, num_samples=1)
-                token_ids = torch.cat((token_ids, next_tokens), dim=-1)
-        return token_ids
+        return out  # todo what is the shape?
