@@ -77,7 +77,7 @@ class GPTTrainer:
 
     @torch.no_grad()
     def generate(self):
-        prompt = "To be, or not "
+        prompt = "The quick brown fox"
         input_ids = (
             torch.tensor(self.tokenizer.encode(prompt)).view(1, -1).to(self.device)
         )

@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from llm_from_scratch.attention.attention import (
+from llm_from_scratch.attention.scaled_dot_product import (
     MultiHeadAttention,
     SingleHeadAttention,
     scaled_dot_product_attention,
