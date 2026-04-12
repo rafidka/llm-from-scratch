@@ -83,7 +83,7 @@ heavy training offloaded to cloud GPUs.
 
 **Effort: 2-3 sessions**
 
-- [ ] Classification fine-tuning (e.g., spam detection or sentiment)
+- [x] Classification fine-tuning (e.g., spam detection or sentiment)
 - [ ] Instruction fine-tuning (Alpaca-style)
 - [ ] **Deep dive: LoRA / QLoRA** — implement parameter-efficient fine-tuning
 - [ ] Evaluate fine-tuned models

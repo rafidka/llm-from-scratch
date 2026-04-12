@@ -448,3 +448,34 @@
 
 ### Open questions
 - None — Phase 5 complete!
+
+---
+
+## Session 17 — 2026-04-12 — Classification Fine-tuning
+
+### What we covered
+- Refactored model architecture: GPT (base) → GPTForCausalLM / GPTForClassification
+- Implemented GPTForClassification with classification head
+- Implemented GPTForClassificationTrainer with evaluation metrics
+- Created DatasetForClassification for HuggingFace datasets
+- Set up IMDB sentiment classification training
+
+### Key learnings
+- Classification head uses last token's hidden state: `cls_head(out[:, -1, :])`
+- Lower learning rate for fine-tuning: 5e-5 vs 3e-4 for pretraining
+- Evaluation metrics: accuracy, precision, recall, F1
+- Division by zero guards needed for precision/recall when TP=0
+- `torch.no_grad()` essential for eval to avoid memory overhead
+
+### Code written
+- `src/llm_from_scratch/model/classification.py` — GPTForClassification class
+- `src/llm_from_scratch/model/pretrained.py` — load_pretrained_cls() and load_pretrained_lm()
+- `src/llm_from_scratch/training/classification.py` — GPTForClassificationTrainer with eval
+- `src/llm_from_scratch/data/classification.py` — DatasetForClassification and create_dataloader
+- `examples/training/classification.py` — IMDB sentiment classification training script
+
+### PLAN.md items completed
+- [x] Classification fine-tuning (e.g., spam detection or sentiment)
+
+### Open questions
+- Next: Instruction fine-tuning or LoRA deep dive
