@@ -17,7 +17,8 @@ from torch import nn
 from transformers import GPT2LMHeadModel
 
 from llm_from_scratch.model.causallm import GPTForCausalLM
-from llm_from_scratch.model.base import TransformerBlock
+from llm_from_scratch.model.base import GPT, TransformerBlock
+from llm_from_scratch.model.classification import GPTForClassification
 
 
 SUPPORTED_MODELS = ["gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"]
@@ -41,7 +42,32 @@ class _FakeLinear:
     bias: torch.Tensor
 
 
-def load_pretrained(model_name: str, max_seq_len: int = 1024) -> GPTForCausalLM:
+def load_pretrained_lm(
+    model_name: str,
+    max_seq_len: int = 1024,
+) -> GPTForCausalLM:
+    return _load_pretrained(GPTForCausalLM, model_name, max_seq_len)
+
+
+def load_pretrained_cls(
+    model_name: str,
+    num_classes: int,
+    max_seq_len: int = 1024,
+) -> GPTForClassification:
+    return _load_pretrained(
+        GPTForClassification,
+        model_name,
+        max_seq_len,
+        num_classes=num_classes,
+    )
+
+
+def _load_pretrained(
+    cls,
+    model_name: str,
+    max_seq_len: int = 1024,
+    **kwargs,
+):
     """
     Load a pretrained GPT model from HuggingFace.
 
@@ -64,16 +90,17 @@ def load_pretrained(model_name: str, max_seq_len: int = 1024) -> GPTForCausalLM:
     hf_model = GPT2LMHeadModel.from_pretrained(model_name)
     config = hf_model.config
 
-    model = GPTForCausalLM(
+    model = cls(
         vocab_size=config.vocab_size,
         embed_dim=config.n_embd,
         num_heads=config.n_head,
         num_layers=config.n_layer,
         max_seq_len=max_seq_len,
         dropout=0.0,
+        **kwargs,
     )
 
-    _load_weights(model, hf_model)
+    load_weights(model, hf_model)
     return model
 
 
@@ -137,7 +164,7 @@ def _extract_qkv(
     return q, k, v
 
 
-def _load_weights(model: GPTForCausalLM, hf_model: GPT2LMHeadModel) -> None:
+def load_weights(model: GPT | GPTForCausalLM, hf_model: GPT2LMHeadModel) -> None:
     """
     Load weights from HuggingFace GPT2LMHeadModel into our GPT model.
 
@@ -170,4 +197,6 @@ def _load_weights(model: GPTForCausalLM, hf_model: GPT2LMHeadModel) -> None:
             _copy_linear(our_block.ff.ff2, hf_block.mlp.c_proj, transpose=True)
 
         _copy_layernorm(model.ln, hf.ln_f)
-        model.lm_head.weight.copy_(hf_model.lm_head.weight)
+
+        if isinstance(model, GPTForCausalLM):
+            model.lm_head.weight.copy_(hf_model.lm_head.weight)

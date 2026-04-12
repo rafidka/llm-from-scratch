@@ -1,8 +1,8 @@
 import torch
-from llm_from_scratch.model.transformer import GPT
+from llm_from_scratch.model.causallm import GPTForCausalLM
 
 # Small model for testing
-model = GPT(
+model = GPTForCausalLM(
     vocab_size=1000,
     embed_dim=64,
     num_heads=4,

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import Any, Iterator
 
 from math import floor
 
@@ -6,9 +6,6 @@ from torch.utils.data import Dataset, IterableDataset
 from torch import Tensor, tensor
 
 from llm_from_scratch.tokenizers.base import Tokenizer
-
-if TYPE_CHECKING:
-    pass
 
 
 class LLMDataset(Dataset[tuple[Tensor, Tensor]]):

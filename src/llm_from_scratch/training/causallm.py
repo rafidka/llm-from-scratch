@@ -11,7 +11,7 @@ from llm_from_scratch.model.causallm import GPTForCausalLM
 from llm_from_scratch.tokenizers.base import Tokenizer
 
 
-class GPTTrainer:
+class GPTForCausalLMTrainer:
     def __init__(
         self,
         model: GPTForCausalLM,

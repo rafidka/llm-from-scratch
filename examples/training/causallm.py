@@ -4,10 +4,10 @@ from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
 
 from llm_from_scratch.data.loader import LLMDataLoader
-from llm_from_scratch.model.transformer import GPT
+from llm_from_scratch.model.causallm import GPTForCausalLM
 from llm_from_scratch.tokenizers.base import Tokenizer
 from llm_from_scratch.tokenizers.tiktoken_adapter import TiktokenTokenizer
-from llm_from_scratch.training.trainer import GPTTrainer
+from llm_from_scratch.training.causallm import GPTForCausalLMTrainer
 
 from ..data.dataset_tiny_shakespeare import get_dataloader
 
@@ -39,13 +39,15 @@ def create_trainer(
     weight_decay: float,
     dl: LLMDataLoader,
 ):
-    model = GPT.tiny(vocab_size, max_seq_len)
+    model = GPTForCausalLM.tiny(vocab_size, max_seq_len)
     model.apply(init_weights)
     model.to(device)
     optim = AdamW(model.parameters(), weight_decay=weight_decay)
     loss_fn = CrossEntropyLoss()
 
-    return GPTTrainer(model, tokenizer, optim, loss_fn, epochs, lr, dl, device)
+    return GPTForCausalLMTrainer(
+        model, tokenizer, optim, loss_fn, epochs, lr, dl, device
+    )
 
 
 max_seq_len = 256
