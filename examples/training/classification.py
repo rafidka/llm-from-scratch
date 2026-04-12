@@ -1,9 +1,7 @@
 import torch
+from datasets import load_dataset
 from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
-
-from datasets import load_dataset
-
 
 from llm_from_scratch.data.classification import create_dataloader
 from llm_from_scratch.model.pretrained import load_pretrained_cls
@@ -50,8 +48,8 @@ def create_trainer(
         loss_fn,
         epochs,
         lr,
-        train_dl,
         device,
+        train_dl,
         eval_dl,
     )
 

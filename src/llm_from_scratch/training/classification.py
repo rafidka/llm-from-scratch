@@ -22,9 +22,9 @@ class GPTForClassificationTrainer:
         loss_fn: CrossEntropyLoss,
         epochs: int,
         max_lr: float,
-        train_loader: DataLoader,
         device: torch.device,
-        eval_loader: DataLoader | None = None,  # TODO move up after train_loader
+        train_loader: DataLoader,
+        eval_loader: DataLoader | None = None,
         eval_every_step: int = 500,
     ):
         self.model = model
@@ -116,18 +116,19 @@ class GPTForClassificationTrainer:
     def eval(self):
         if not self.eval_loader:
             raise RuntimeError("eval_loader is not set.")
-        self.model.eval()
-        all_true_labels = torch.empty((0), device=self.device)
-        all_pred_labels = torch.empty((0), device=self.device)
-        for input_ids, true_labels in tqdm(
-            islice(self.eval_loader, 100)
-        ):  # we don't need to use a lot of samples.
-            input_ids = input_ids.to(self.device)
-            true_labels = true_labels.to(self.device)
-            pred_labels = self.model(input_ids).argmax(dim=-1)
+        with torch.no_grad():
+            self.model.eval()
+            all_true_labels = torch.empty((0), device=self.device)
+            all_pred_labels = torch.empty((0), device=self.device)
+            for input_ids, true_labels in tqdm(
+                islice(self.eval_loader, 100)
+            ):  # we don't need to use a lot of samples.
+                input_ids = input_ids.to(self.device)
+                true_labels = true_labels.to(self.device)
+                pred_labels = self.model(input_ids).argmax(dim=-1)
 
-            all_true_labels = torch.cat((all_true_labels, true_labels))
-            all_pred_labels = torch.cat((all_pred_labels, pred_labels))
+                all_true_labels = torch.cat((all_true_labels, true_labels))
+                all_pred_labels = torch.cat((all_pred_labels, pred_labels))
 
         tp, tn, fp, fn = 0, 0, 0, 0
         for true_label, pred_label in zip(all_true_labels, all_pred_labels):
@@ -145,10 +146,14 @@ class GPTForClassificationTrainer:
                 else:
                     fn += 1
 
-        accuracy = (tp + tn) / (tp + tn + fp + fn)
-        precision = tp / (tp + fp)
-        recall = tp / (tp + fn)
-        f1 = 2 * precision * recall / (precision + recall)
+        accuracy = (tp + tn) / (tp + tn + fp + fn) if tp + tn + fp + fn > 0 else 0.0
+        precision = tp / (tp + fp) if tp + fp > 0 else 0.0
+        recall = tp / (tp + fn) if tp + fn > 0 else 0.0
+        f1 = (
+            2 * precision * recall / (precision + recall)
+            if precision + recall > 0
+            else 0.0
+        )
         print("accuracy", accuracy)
         print("precision", precision)
         print("recall", recall)
