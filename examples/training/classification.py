@@ -4,6 +4,7 @@ from torch.optim import AdamW
 
 from datasets import load_dataset
 
+
 from llm_from_scratch.data.classification import create_dataloader
 from llm_from_scratch.model.pretrained import load_pretrained_cls
 from llm_from_scratch.tokenizers.tiktoken_adapter import TiktokenTokenizer
@@ -29,7 +30,8 @@ def create_trainer(
 ):
     tokenizer = TiktokenTokenizer()  # Uses GPT-2 encoding by default
     imdb = load_dataset("stanfordnlp/imdb")
-    dataloader = create_dataloader(imdb["train"], tokenizer, batch_size, max_seq_len)
+    train_dl = create_dataloader(imdb["train"], tokenizer, batch_size, max_seq_len)
+    eval_dl = create_dataloader(imdb["test"], tokenizer, batch_size, max_seq_len)
 
     model = load_pretrained_cls(
         base_model_name,
@@ -42,7 +44,15 @@ def create_trainer(
     loss_fn = CrossEntropyLoss()
 
     return GPTForClassificationTrainer(
-        model, tokenizer, optim, loss_fn, epochs, lr, dataloader, device
+        model,
+        tokenizer,
+        optim,
+        loss_fn,
+        epochs,
+        lr,
+        train_dl,
+        device,
+        eval_dl,
     )
 
 
