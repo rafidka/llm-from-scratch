@@ -12,7 +12,7 @@ class TiktokenTokenizer(Tokenizer):
         return self._encoding.max_token_value + 1
 
     def encode(self, text: str) -> list[int]:
-        return self._encoding.encode(text)
+        return self._encoding.encode(text, allowed_special={"<|endoftext|>"})
 
     def decode(self, token_ids: list[int]) -> str:
         return self._encoding.decode(token_ids)

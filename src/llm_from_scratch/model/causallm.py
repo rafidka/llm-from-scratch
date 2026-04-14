@@ -36,6 +36,7 @@ class GPTForCausalLM(GPT):
         max_new_tokens: int,
         temperature: float = 1.0,
         top_k: int | None = None,
+        eos_token_id: int | None = None,
     ):
         # token_ids: [batch, seq_len]
         for _ in range(max_new_tokens):
@@ -48,22 +49,23 @@ class GPTForCausalLM(GPT):
             if temperature == 0:
                 # Temperature is zero; use greedy sampling.
                 next_tokens = last_logit.argmax(dim=-1, keepdim=True)
-                token_ids = torch.cat((token_ids, next_tokens), dim=-1)
-                continue
-
-            # Apply temperature and softmax to find probs.
-            probs = torch.softmax(last_logit / temperature, dim=-1)
-
-            if top_k:
-                # top_k specified; apply it.
-                top_k_probs, top_k_indices = torch.topk(probs, k=top_k, dim=-1)
-
-                next_tokens = top_k_indices.gather(
-                    -1,  # dim
-                    torch.multinomial(top_k_probs, num_samples=1),
-                )
-                token_ids = torch.cat((token_ids, next_tokens), dim=-1)
             else:
-                next_tokens = torch.multinomial(probs, num_samples=1)
-                token_ids = torch.cat((token_ids, next_tokens), dim=-1)
+                # Apply temperature and softmax to find probs.
+                probs = torch.softmax(last_logit / temperature, dim=-1)
+
+                if top_k:
+                    # top_k specified; apply it.
+                    top_k_probs, top_k_indices = torch.topk(probs, k=top_k, dim=-1)
+
+                    next_tokens = top_k_indices.gather(
+                        -1,  # dim
+                        torch.multinomial(top_k_probs, num_samples=1),
+                    )
+                else:
+                    next_tokens = torch.multinomial(probs, num_samples=1)
+
+            token_ids = torch.cat((token_ids, next_tokens), dim=-1)
+
+            if eos_token_id is not None and (next_tokens == eos_token_id).all():
+                break
         return token_ids

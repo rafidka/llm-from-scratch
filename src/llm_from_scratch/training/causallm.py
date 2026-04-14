@@ -1,12 +1,12 @@
 import math
 
 import torch
+from torch.utils.data import DataLoader
 from torch import Tensor
 from torch.nn import CrossEntropyLoss
 from torch.optim import Optimizer
 from tqdm import tqdm
 
-from llm_from_scratch.data.loader import LLMDataLoader
 from llm_from_scratch.model.causallm import GPTForCausalLM
 from llm_from_scratch.tokenizers.base import Tokenizer
 
@@ -20,7 +20,7 @@ class GPTForCausalLMTrainer:
         loss_fn: CrossEntropyLoss,
         epochs: int,
         max_lr: float,
-        loader: LLMDataLoader,
+        loader: DataLoader,
         device: torch.device,
     ):
         self.model = model
@@ -64,8 +64,9 @@ class GPTForCausalLMTrainer:
 
         self.optim.step()
 
-        if abs_step % 50 == 0:
+        if abs_step % 100 == 0 and abs_step > 0:
             print(f"Step {abs_step}: lr={lr:.2e}, Loss: {loss:.4f}")
+            self.generate()
 
         return loss.item()
 
@@ -77,14 +78,31 @@ class GPTForCausalLMTrainer:
 
     @torch.no_grad()
     def generate(self):
-        prompt = "The quick brown fox"
-        input_ids = (
-            torch.tensor(self.tokenizer.encode(prompt)).view(1, -1).to(self.device)
-        )
-        output_ids = self.model.generate(
-            input_ids, max_new_tokens=50, temperature=0.8, top_k=40
-        )
-        print(self.tokenizer.decode(output_ids[0].tolist()))
+        # TODO Make the prompt a parameter so we don't have to manually change the
+        # prompt for different training types.
+        # prompt = "The quick brown fox"
+
+        prompts = [
+            "### Instruction:\nWhat is the capital of France?\n\n### Response:\n",
+            "### Instruction:\nExplain why the sky is blue in simple terms.\n\n### Response:\n",
+            "### Instruction:\nList three benefits of exercise.\n\n### Response:\n",
+        ]
+        for prompt in prompts:
+            input_ids = (
+                torch.tensor(self.tokenizer.encode(prompt)).view(1, -1).to(self.device)
+            )
+            output_ids = self.model.generate(
+                input_ids,
+                max_new_tokens=256,
+                temperature=0.8,
+                top_k=40,
+                eos_token_id=self.tokenizer.encode("<|endoftext|>")[0],
+            )
+            print("----------")
+            print()
+            print(self.tokenizer.decode(output_ids[0].tolist()))
+        print()
+        print("----------")
 
     def train(self):
         for epoch in range(self.epochs):

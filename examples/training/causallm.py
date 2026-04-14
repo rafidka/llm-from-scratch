@@ -2,8 +2,8 @@ import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss
 from torch.optim import AdamW
+from torch.utils.data import DataLoader
 
-from llm_from_scratch.data.loader import LLMDataLoader
 from llm_from_scratch.model.causallm import GPTForCausalLM
 from llm_from_scratch.tokenizers.base import Tokenizer
 from llm_from_scratch.tokenizers.tiktoken_adapter import TiktokenTokenizer
@@ -37,7 +37,7 @@ def create_trainer(
     epochs: int,
     lr: float,
     weight_decay: float,
-    dl: LLMDataLoader,
+    dl: DataLoader,
 ):
     model = GPTForCausalLM.tiny(vocab_size, max_seq_len)
     model.apply(init_weights)
