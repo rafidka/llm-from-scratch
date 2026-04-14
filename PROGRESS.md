@@ -479,3 +479,36 @@
 
 ### Open questions
 - Next: Instruction fine-tuning or LoRA deep dive
+
+---
+
+## Session 18 — 2026-04-13 — Instruction Fine-tuning
+
+### What we covered
+- Understood masked loss concept: only compute loss on response tokens, not prompt tokens
+- Refactored `DatasetForInstructionFineTuning` to use `ignore_index=-100` instead of a separate mask tensor
+- Simplified the pipeline: no new model class or trainer needed — `GPTForCausalLMTrainer` works with `CrossEntropyLoss(ignore_index=-100)`
+- Added `eos_token_id` parameter to `GPTForCausalLM.generate()` for early stopping
+- Updated `GPTForCausalLMTrainer.generate()` with instruction-style prompts
+- Set up instruction fine-tuning training script using Alpaca dataset and GPT-2 Large
+- Discussed training efficiency: gradient accumulation, mixed precision, length-grouped batching, gradient checkpointing
+
+### Key learnings
+- `ignore_index=-100` in `CrossEntropyLoss` is the standard way to mask loss — eliminates need for a separate mask tensor
+- Padding `target_ids` with `-100` (not 0) ensures padding tokens don't contribute to loss
+- Padding `input_ids` with 0 is not ideal (model attends to padding as real tokens) but works in practice; proper fix requires attention masks
+- For pretraining, no padding is needed (all sequences are exactly `max_seq_len`)
+- Instruction fine-tuning uses same causal LM training loop, just with masked targets
+- GPT-2 Large (774M) on A100 80GB OOMs at batch size 10 due to activation memory; need gradient accumulation + mixed precision
+
+### Code written
+- `src/llm_from_scratch/data/instruction.py` — Refactored to use `-100` ignore_index instead of mask tensor
+- `src/llm_from_scratch/model/causallm.py` — Added `eos_token_id` parameter to `generate()`
+- `src/llm_from_scratch/training/causallm.py` — Updated `generate()` with instruction prompts and EOS stopping
+- `examples/training/instruction.py` — Instruction fine-tuning training script
+
+### PLAN.md items completed
+- [x] Instruction fine-tuning (Alpaca-style)
+
+### Open questions
+- Next: Training efficiency deep dive (gradient accumulation, mixed precision, length-grouped batching, gradient checkpointing)

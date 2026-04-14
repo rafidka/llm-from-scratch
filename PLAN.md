@@ -84,7 +84,8 @@ heavy training offloaded to cloud GPUs.
 **Effort: 2-3 sessions**
 
 - [x] Classification fine-tuning (e.g., spam detection or sentiment)
-- [ ] Instruction fine-tuning (Alpaca-style)
+- [x] Instruction fine-tuning (Alpaca-style)
+- [ ] **Deep dive: Training efficiency** — gradient accumulation, mixed precision (bf16), length-grouped batching, gradient checkpointing
 - [ ] **Deep dive: LoRA / QLoRA** — implement parameter-efficient fine-tuning
 - [ ] Evaluate fine-tuned models
 
