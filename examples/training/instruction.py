@@ -19,11 +19,17 @@ DEVICE = (
     else torch.device("cpu")
 )
 
-MAX_SEQ_LEN = 1024
+BATCH_SIZE = 8
 EPOCHS = 5
+EVAL_PROMPTS = [
+    "### Instruction:\nWhat is the capital of France?\n\n### Response:\n",
+    "### Instruction:\nExplain why the sky is blue in simple terms.\n\n### Response:\n",
+    "### Instruction:\nList three benefits of exercise.\n\n### Response:\n",
+]
+GRAD_ACCML_STEPS = 5
 LR = 5e-5
+MAX_SEQ_LEN = 1024
 WEIGHT_DECAY = 0.01
-BATCH_SIZE = 10
 
 dotenv.load_dotenv()
 
@@ -42,7 +48,16 @@ def create_trainer(
     loss_fn = CrossEntropyLoss(ignore_index=_IGNORE_INDEX)
 
     return GPTForCausalLMTrainer(
-        model, tokenizer, optim, loss_fn, epochs, lr, dl, DEVICE
+        model,
+        tokenizer,
+        optim,
+        loss_fn,
+        epochs,
+        lr,
+        dl,
+        DEVICE,
+        test_prompts=EVAL_PROMPTS,
+        grad_accml_steps=GRAD_ACCML_STEPS,
     )
 
 
