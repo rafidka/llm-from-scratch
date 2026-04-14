@@ -1,0 +1,26 @@
+# Version control
+.git/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+
+# IDE / tooling
+.vscode/
+.ruff_cache/
+.pytest_cache/
+
+# Environment and secrets
+.env
+
+# Downloaded data (large, not needed for sync)
+/data/
+
+# Sync tool artifacts (prevent loops)
+.syncignore
