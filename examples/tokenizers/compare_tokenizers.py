@@ -1,12 +1,37 @@
+import os
+
+import requests
+
 from llm_from_scratch.tokenizers.tiktoken_adapter import TiktokenTokenizer
 from llm_from_scratch.tokenizers.bpe import BPETokenizer
 
-# Load GPT-2 tokenizer
+THE_VERDICT_URL = "https://raw.githubusercontent.com/rasbt/LLMs-from-scratch/refs/heads/main/ch02/01_main-chapter-code/the-verdict.txt"
+
+
+def download_the_verdict(save_path: str) -> str:
+    response = requests.get(THE_VERDICT_URL, timeout=30)
+    response.raise_for_status()
+    with open(save_path, "w", encoding="utf-8") as f:
+        f.write(response.text)
+    return save_path
+
+
+data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
+os.makedirs(data_dir, exist_ok=True)
+filepath = os.path.join(data_dir, "the_verdict.txt")
+
+if not os.path.exists(filepath):
+    print("Downloading The Verdict text...")
+    download_the_verdict(filepath)
+    print(f"Saved to {filepath}")
+else:
+    print(f"Found existing file at {filepath}")
+
+with open(filepath, "r", encoding="utf-8") as f:
+    corpus = f.read()[:10000]
+
 gpt2 = TiktokenTokenizer("gpt2")
 
-# Our BPE tokenizer (trained on small corpus)
-with open("data/the_verdict.txt", "r") as f:
-    corpus = f.read()[:10000]
 our_bpe = BPETokenizer(corpus, 100)
 
 # Compare tokenization

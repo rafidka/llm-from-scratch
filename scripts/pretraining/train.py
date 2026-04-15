@@ -2,7 +2,6 @@ import argparse
 import math
 from pathlib import Path
 
-import torch
 from datasets import load_dataset  # type: ignore[import-untyped]
 from torch import nn
 from torch.nn import CrossEntropyLoss
@@ -10,8 +9,9 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 
 from llm_from_scratch.data.dataset import StreamingLLMDataset
-from llm_from_scratch.model.transformer import GPT
+from llm_from_scratch.model.causallm import GPTForCausalLM
 from llm_from_scratch.tokenizers.tiktoken_adapter import TiktokenTokenizer
+from llm_from_scratch.utils import get_device
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,11 +64,15 @@ def init_weights(module: nn.Module) -> None:
         nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
 
-def create_model(model_size: str, vocab_size: int, max_seq_len: int) -> GPT:
-    if model_size == "small":
-        return GPT.small(vocab_size, max_seq_len)
+def create_model(model_size: str, vocab_size: int, max_seq_len: int) -> GPTForCausalLM:
+    if model_size == "tiny":
+        return GPTForCausalLM.tiny(vocab_size, max_seq_len)
+    elif model_size == "small":
+        return GPTForCausalLM.small(vocab_size, max_seq_len)
     elif model_size == "medium":
-        return GPT.medium(vocab_size, max_seq_len)
+        return GPTForCausalLM.medium(vocab_size, max_seq_len)
+    elif model_size == "large":
+        return GPTForCausalLM.large(vocab_size, max_seq_len)
     else:
         raise ValueError(f"Unknown model size: {model_size}")
 
@@ -106,7 +110,7 @@ def load_wikipedia_data(
 
 
 def save_checkpoint(
-    model: GPT,
+    model: GPTForCausalLM,
     optimizer: AdamW,
     epoch: int,
     training_step: int,
@@ -129,7 +133,7 @@ def save_checkpoint(
 
 
 def generate_sample(
-    model: GPT,
+    model: GPTForCausalLM,
     tokenizer: TiktokenTokenizer,
     device: torch.device,
     prompt: str,
@@ -151,13 +155,7 @@ def generate_sample(
 
 
 def train(args: argparse.Namespace) -> None:
-    device = torch.device(
-        "cuda"
-        if torch.cuda.is_available()
-        else "mps"
-        if torch.mps.is_available()
-        else "cpu"
-    )
+    device = get_device()
     print(f"Using device: {device}")
 
     tokenizer = TiktokenTokenizer()
