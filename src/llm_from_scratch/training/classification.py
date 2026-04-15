@@ -1,19 +1,19 @@
-import math
 from itertools import islice
 
 import torch
+from tqdm import tqdm
 from torch import Tensor
 from torch.nn import CrossEntropyLoss
 from torch.nn.utils.rnn import pad_sequence
 from torch.optim import Optimizer
-from tqdm import tqdm
+from torch.utils.data import DataLoader
 
-from llm_from_scratch.data.classification import DataLoader
 from llm_from_scratch.model.classification import GPTForClassification
 from llm_from_scratch.tokenizers.base import Tokenizer
+from llm_from_scratch.training.base import GPTTrainer
 
 
-class GPTForClassificationTrainer:
+class GPTForClassificationTrainer(GPTTrainer[GPTForClassification]):
     def __init__(
         self,
         model: GPTForClassification,
@@ -22,63 +22,55 @@ class GPTForClassificationTrainer:
         loss_fn: CrossEntropyLoss,
         epochs: int,
         max_lr: float,
+        data_loader: DataLoader,
         device: torch.device,
-        train_loader: DataLoader,
         eval_loader: DataLoader | None = None,
         eval_every_step: int = 500,
+        grad_accml_steps: int = 1,
+        use_mixed_precision: bool = False,
+        warmup_ratio: float = 0.1,
+        log_every: int = 100,
+        checkpoint_dir: str | None = None,
+        checkpoint_every: int = 1000,
+        total_steps: int | None = None,
     ):
-        self.model = model
-        self.tokenizer = tokenizer
-        self.optim = optim
-        self.loss_fn = loss_fn
-        self.epochs = epochs
-        self.device = device
-
-        self.train_loader = train_loader
+        super().__init__(
+            model=model,
+            tokenizer=tokenizer,
+            optim=optim,
+            loss_fn=loss_fn,
+            epochs=epochs,
+            max_lr=max_lr,
+            data_loader=data_loader,
+            device=device,
+            grad_accml_steps=grad_accml_steps,
+            use_mixed_precision=use_mixed_precision,
+            warmup_ratio=warmup_ratio,
+            log_every=log_every,
+            checkpoint_dir=checkpoint_dir,
+            checkpoint_every=checkpoint_every,
+            total_steps=total_steps,
+        )
         self.eval_loader = eval_loader
         self.eval_every_step = eval_every_step
-        self.max_lr = max_lr
-        self.min_lr = max_lr / 10
-        self.max_steps = epochs * len(train_loader)
-        self.warmup_steps = self.max_steps / 10
-
-    def get_lr(
-        self,
-        step: int,
-    ) -> float:
-        if step < self.warmup_steps:
-            return self.max_lr * step / self.warmup_steps
-        # cosine decay phase
-        progress = (step - self.warmup_steps) / (self.max_steps - self.warmup_steps)
-        return self.min_lr + 0.5 * (self.max_lr - self.min_lr) * (
-            1 + math.cos(math.pi * progress)
-        )
 
     def train_step(self, epoch: int, step: int, input_ids: Tensor, target_cls: Tensor):
-        # Set the learning rate
-        abs_step = epoch * len(self.train_loader) + step
-        lr = self.get_lr(abs_step)
-        for pg in self.optim.param_groups:
-            pg["lr"] = lr
+        with self.mp_context:
+            logits = self.model(input_ids)
+            loss = self.loss_fn(logits, target_cls)
+        (loss / self.grad_accml_steps).backward()
 
-        self.optim.zero_grad()
+        self._optim_step()
 
-        logits = self.model(input_ids)  # shape [batch, num_classes]
-        loss = self.loss_fn(logits, target_cls)
+        self.last_loss = loss.item()
+        self._on_train_step_end(epoch, step)
+        return self.last_loss
 
-        loss.backward()
-
-        self.optim.step()
-
-        # if abs_step % 100 == 0:
-        if abs_step > 0 and abs_step % self.eval_every_step == 0:
-            print(f"Step {abs_step}: lr={lr:.2e}, Loss: {loss:.4f}")
-            self.sample_classification()
-
-            if self.eval_loader:
-                self.eval()
-
-        return loss.item()
+    def _on_log_step(self, step_abs: int) -> None:
+        print(f"Step {step_abs}: lr={self.lr:.2e}, Loss: {self.last_loss:.4f}")
+        self.sample_classification()
+        if self.eval_loader:
+            self.eval()
 
     def sample_classification(self):
         texts = [
@@ -107,12 +99,6 @@ class GPTForClassificationTrainer:
                 print(f"{label} - {text[:50]}...")
         self.model.train()
 
-    def train_epoch(self, epoch: int):
-        for step, (input_ids, target_cls) in tqdm(enumerate(self.train_loader)):
-            input_ids = input_ids.to(self.device)
-            target_cls = target_cls.to(self.device)
-            self.train_step(epoch, step, input_ids, target_cls)
-
     def eval(self):
         if not self.eval_loader:
             raise RuntimeError("eval_loader is not set.")
@@ -120,9 +106,7 @@ class GPTForClassificationTrainer:
             self.model.eval()
             all_true_labels = torch.empty((0), device=self.device)
             all_pred_labels = torch.empty((0), device=self.device)
-            for input_ids, true_labels in tqdm(
-                islice(self.eval_loader, 100)
-            ):  # we don't need to use a lot of samples.
+            for input_ids, true_labels in tqdm(islice(self.eval_loader, 100)):
                 input_ids = input_ids.to(self.device)
                 true_labels = true_labels.to(self.device)
                 pred_labels = self.model(input_ids).argmax(dim=-1)
@@ -158,9 +142,3 @@ class GPTForClassificationTrainer:
         print("precision", precision)
         print("recall", recall)
         print("f1", f1)
-
-    def train(self):
-        for epoch in range(self.epochs):
-            self.model.train()  # set the model to training mode
-            print(f"Epoch {epoch}")
-            self.train_epoch(epoch)

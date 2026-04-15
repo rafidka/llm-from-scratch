@@ -57,15 +57,15 @@ def train(args: argparse.Namespace) -> None:
     loss_fn = CrossEntropyLoss()
 
     trainer = GPTForClassificationTrainer(
-        model,
-        tokenizer,
-        optim,
-        loss_fn,
-        args.epochs,
-        args.lr,
-        device,
-        train_dl,
-        eval_dl,
+        model=model,
+        tokenizer=tokenizer,
+        optim=optim,
+        loss_fn=loss_fn,
+        epochs=args.epochs,
+        max_lr=args.lr,
+        data_loader=train_dl,
+        device=device,
+        eval_loader=eval_dl,
     )
     trainer.train()
 
