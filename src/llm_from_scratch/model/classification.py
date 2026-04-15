@@ -24,6 +24,6 @@ class GPTForClassification(GPT):
         if out.ndim == 3:
             logits = self.cls_head(out[:, -1, :])  # shape [batch, embed_dim]
         elif out.ndim == 2:
-            logits = self.cls_head(out[:, :])  # shape [batch, embed_dim]
+            logits = self.cls_head(out[-1, :])  # shape [embed_dim]
 
         return logits  # shape [batch, num_classes]

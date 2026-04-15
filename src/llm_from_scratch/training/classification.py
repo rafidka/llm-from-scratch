@@ -114,21 +114,10 @@ class GPTForClassificationTrainer(GPTTrainer[GPTForClassification]):
                 all_true_labels = torch.cat((all_true_labels, true_labels))
                 all_pred_labels = torch.cat((all_pred_labels, pred_labels))
 
-        tp, tn, fp, fn = 0, 0, 0, 0
-        for true_label, pred_label in zip(all_true_labels, all_pred_labels):
-            t = int(true_label.item())
-            p = int(pred_label.item())
-
-            if t == p:
-                if p == 1:
-                    tp += 1
-                else:
-                    tn += 1
-            else:
-                if p == 1:
-                    fp += 1
-                else:
-                    fn += 1
+        tp = ((pred_labels == 1) & (true_labels == 1)).sum().item()
+        tn = ((pred_labels == 0) & (true_labels == 0)).sum().item()
+        fp = ((pred_labels == 1) & (true_labels == 0)).sum().item()
+        fn = ((pred_labels == 0) & (true_labels == 1)).sum().item()
 
         accuracy = (tp + tn) / (tp + tn + fp + fn) if tp + tn + fp + fn > 0 else 0.0
         precision = tp / (tp + fp) if tp + fp > 0 else 0.0

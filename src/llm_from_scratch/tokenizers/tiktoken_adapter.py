@@ -9,7 +9,7 @@ class TiktokenTokenizer(Tokenizer):
 
     @property
     def vocab_size(self):
-        return self._encoding.max_token_value + 1
+        return self._encoding.n_vocab
 
     def encode(self, text: str) -> list[int]:
         return self._encoding.encode(text, allowed_special={"<|endoftext|>"})

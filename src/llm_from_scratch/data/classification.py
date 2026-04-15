@@ -17,16 +17,20 @@ class DatasetForClassification(Dataset[tuple[Tensor, Tensor]]):
         text_field_name: str = "text",
         label_field_name: str = "label",
     ):
-        self.hf_dataset = hf_dataset
         self.tokenizer = tokenizer
-        # TODO Avoid double encoding (here and below in __getitem__)
-        self.samples = [
-            sample
-            for sample in hf_dataset
-            if len(self.tokenizer.encode(sample[text_field_name])) <= max_text_len
-        ]
         self.text_field_name = text_field_name
         self.label_field_name = label_field_name
+        self.samples: list[tuple[list[int], int]] = []
+        for sample in hf_dataset:
+            text: str = sample.get(text_field_name, "")
+            label = sample.get(label_field_name, None)
+            if not text or not text.strip() or label is None:
+                continue
+            if not isinstance(text, str) or not isinstance(label, int):
+                continue
+            tokens = tokenizer.encode(text)
+            if len(tokens) <= max_text_len:
+                self.samples.append((tokens, label))
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -35,16 +39,7 @@ class DatasetForClassification(Dataset[tuple[Tensor, Tensor]]):
         if idx < 0 or idx >= len(self.samples):
             raise IndexError()
 
-        sample = self.samples[idx]
-        text: str = sample.get(self.text_field_name, "")
-        label: int = sample.get(self.label_field_name, None)
-        if not text or not text.strip() or label is None:
-            raise ValueError()
-        if not isinstance(text, str):
-            raise ValueError()
-        if not isinstance(label, int):
-            raise ValueError()
-        tokens = self.tokenizer.encode(text)
+        tokens, label = self.samples[idx]
         return tensor(tokens), tensor(label)
 
 

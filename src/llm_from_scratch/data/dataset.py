@@ -1,6 +1,7 @@
 from typing import Any, Iterator
 
 from math import floor
+from random import shuffle as random_shuffle
 
 from torch.utils.data import Dataset, IterableDataset
 from torch import Tensor, tensor
@@ -59,6 +60,8 @@ class StreamingLLMDataset(IterableDataset[tuple[Tensor, Tensor]]):
         max_length: The maximum length of each input sequence.
         stride: The stride for sliding window sampling over the token buffer.
         buffer_limit: The maximum size of the token buffer before trimming (default: 50000).
+        shuffle: Whether to shuffle the HuggingFace dataset before iterating (default: False).
+        shuffle_buffer_size: Buffer size for shuffling when shuffle=True (default: 10_000).
 
     Yields:
         tuple[Tensor, Tensor]: A tuple containing the input tensor and the target tensor
@@ -72,18 +75,26 @@ class StreamingLLMDataset(IterableDataset[tuple[Tensor, Tensor]]):
         max_length: int,
         stride: int,
         buffer_limit: int = 50000,
+        shuffle: bool = False,
+        shuffle_buffer_size: int = 10_000,
     ):
         self.hf_dataset = hf_dataset
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.stride = stride
         self.buffer_limit = buffer_limit
+        self.shuffle = shuffle
+        self.shuffle_buffer_size = shuffle_buffer_size
 
     def __iter__(self) -> Iterator[tuple[Tensor, Tensor]]:
         token_buffer: list[int] = []
         pos = 0
 
-        for example in self.hf_dataset:
+        dataset = self.hf_dataset
+        if self.shuffle:
+            dataset = dataset.shuffle(buffer_size=self.shuffle_buffer_size, seed=None)
+
+        for example in dataset:
             text: str = example.get("text", "")
             if not text or not text.strip():
                 continue

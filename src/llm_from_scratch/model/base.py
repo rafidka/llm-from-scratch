@@ -74,7 +74,11 @@ class GPT(nn.Module):
 
     @classmethod
     def tiny(cls, vocab_size: int, max_seq_len: int):
-        """Create a very small GPT model for testing purposes."""
+        """Create a very small GPT model for testing purposes.
+
+        Note: dropout is set to 0.0 to ensure deterministic behavior in tests.
+        Use GPT.small/medium/large() for training, which use dropout=0.1.
+        """
         return cls(
             vocab_size=vocab_size,
             embed_dim=64,
