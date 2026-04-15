@@ -1,3 +1,4 @@
+import contextlib
 import math
 
 import torch
@@ -24,6 +25,7 @@ class GPTForCausalLMTrainer:
         device: torch.device,
         grad_accml_steps: int = 1,
         test_prompts: list[str] | None = None,
+        use_mixed_precision: bool = False,
     ):
 
         self.model = model
@@ -38,6 +40,12 @@ class GPTForCausalLMTrainer:
         self.device = device
         self.grad_accml_steps = grad_accml_steps
         self.test_prompts = test_prompts
+        self.use_mixed_precision = use_mixed_precision
+        self.mp_context = (
+            torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+            if self.use_mixed_precision
+            else contextlib.nullcontext()
+        )
 
         self.batch_count = len(data_loader)
         self.total_steps = epochs * len(data_loader)  # total steps across all epochs
@@ -107,8 +115,9 @@ class GPTForCausalLMTrainer:
         self.optim.zero_grad()
 
     def train_step(self, epoch: int, step: int, input_ids: Tensor, target_ids: Tensor):
-        logits = self.model(input_ids)  # shape [batch, seq_len, vocab_size]
-        loss = self.loss_fn(logits.flatten(0, 1), target_ids.flatten(0, 1))
+        with self.mp_context:
+            logits = self.model(input_ids)  # shape [batch, seq_len, vocab_size]
+            loss = self.loss_fn(logits.flatten(0, 1), target_ids.flatten(0, 1))
         (loss / self.grad_accml_steps).backward()  # divide to propagate average
 
         self._optim_step(epoch, step)
@@ -135,13 +144,14 @@ class GPTForCausalLMTrainer:
             input_ids = (
                 torch.tensor(self.tokenizer.encode(prompt)).view(1, -1).to(self.device)
             )
-            output_ids = self.model.generate(
-                input_ids,
-                max_new_tokens=256,
-                temperature=0.8,
-                top_k=40,
-                eos_token_id=self.tokenizer.encode("<|endoftext|>")[0],
-            )
+            with self.mp_context:
+                output_ids = self.model.generate(
+                    input_ids,
+                    max_new_tokens=256,
+                    temperature=0.2,
+                    top_k=40,
+                    eos_token_id=self.tokenizer.encode("<|endoftext|>")[0],
+                )
             print("----------")
             print()
             print(self.tokenizer.decode(output_ids[0].tolist()))

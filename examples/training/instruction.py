@@ -58,6 +58,7 @@ def create_trainer(
         DEVICE,
         test_prompts=EVAL_PROMPTS,
         grad_accml_steps=GRAD_ACCML_STEPS,
+        use_mixed_precision=True,
     )
 
 
