@@ -24,6 +24,8 @@ class GPTForCausalLM(GPT):
         )
 
         self.lm_head = nn.Linear(embed_dim, vocab_size, bias=False)
+        # Weight tying between token embeddings and lm_head
+        self.lm_head.weight = self.embedding.token.weight
 
     def forward(self, token_ids: "Tensor") -> "Tensor":
         out = super().forward(token_ids)

@@ -16,10 +16,9 @@ import torch
 from torch import nn
 from transformers import GPT2LMHeadModel
 
-from llm_from_scratch.model.causallm import GPTForCausalLM
 from llm_from_scratch.model.base import GPT, TransformerBlock
+from llm_from_scratch.model.causallm import GPTForCausalLM
 from llm_from_scratch.model.classification import GPTForClassification
-
 
 SUPPORTED_MODELS = ["gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"]
 
@@ -197,6 +196,3 @@ def load_weights(model: GPT | GPTForCausalLM, hf_model: GPT2LMHeadModel) -> None
             _copy_linear(our_block.ff.ff2, hf_block.mlp.c_proj, transpose=True)
 
         _copy_layernorm(model.ln, hf.ln_f)
-
-        if isinstance(model, GPTForCausalLM):
-            model.lm_head.weight.copy_(hf_model.lm_head.weight)
