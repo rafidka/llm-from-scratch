@@ -1,11 +1,12 @@
 import contextlib
 import math
+from pathlib import Path
 
 import torch
-from torch.utils.data import DataLoader
 from torch import Tensor
 from torch.nn import CrossEntropyLoss
 from torch.optim import Optimizer
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from llm_from_scratch.model.causallm import GPTForCausalLM
@@ -26,16 +27,21 @@ class GPTForCausalLMTrainer:
         grad_accml_steps: int = 1,
         test_prompts: list[str] | None = None,
         use_mixed_precision: bool = False,
+        warmup_ratio: float = 0.1,
+        log_every: int = 100,
+        checkpoint_dir: str | None = None,
+        checkpoint_every: int = 1000,
+        generation_tokens: int = 256,
+        total_steps: int | None = None,
     ):
-
         self.model = model
         self.tokenizer = tokenizer
         self.optim = optim
         self.loss_fn = loss_fn
         self.epochs = epochs
         self.max_lr = max_lr
-        self.min_lr = max_lr / 10  # we go with min LR of one 10th of max LR.
-        self.lr = 0.0  # stores the current learning rate
+        self.min_lr = max_lr / 10
+        self.lr = 0.0
         self.data_loader = data_loader
         self.device = device
         self.grad_accml_steps = grad_accml_steps
@@ -46,12 +52,20 @@ class GPTForCausalLMTrainer:
             if self.use_mixed_precision
             else contextlib.nullcontext()
         )
+        self.log_every = log_every
+        self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
+        self.checkpoint_every = checkpoint_every
+        self.generation_tokens = generation_tokens
+        self.last_loss: float = 0.0
 
-        self.batch_count = len(data_loader)
-        self.total_steps = epochs * len(data_loader)  # total steps across all epochs
-        self.warmup_steps = self.total_steps / 10  # steps to go from min to max LR
+        if total_steps is not None:
+            self.total_steps = total_steps
+        else:
+            self.total_steps = epochs * len(data_loader)
+        self.warmup_steps = int(self.total_steps * warmup_ratio)
         if self.warmup_steps <= 0:
             raise ValueError("warmup_steps must be > 0")
+        self._global_step = 0
 
     def get_lr(self, step_abs: int) -> float:
         """Returns the learning rate for a given absolute training step.
@@ -80,7 +94,6 @@ class GPTForCausalLMTrainer:
         if not (0 <= step_abs < self.total_steps):
             raise ValueError("step_abs out of range")
 
-        # Convert external 0-indexed step to 1-indexed step.
         step_abs = step_abs + 1
 
         if step_abs <= self.warmup_steps:
@@ -93,41 +106,63 @@ class GPTForCausalLMTrainer:
             1 + math.cos(math.pi * progress)
         )
 
-    def _optim_step(self, epoch: int, step: int):
-        step_abs = epoch * len(self.data_loader) + step
-        self.lr = self.get_lr(step_abs)
+    def _optim_step(self):
+        self.lr = self.get_lr(self._global_step)
 
-        # Only run optimization step if:
-        # - We have accumulated losses for grad_accml_steps steps.
-        # - This is the last training step.
-        if (step_abs + 1) % self.grad_accml_steps != 0 and (
-            step_abs + 1
+        if (self._global_step + 1) % self.grad_accml_steps != 0 and (
+            self._global_step + 1
         ) < self.total_steps:
-            # We are in gradient accumulation mode, and nothing to do at this step.
             return
 
-        # First, set the learning rate.
         for pg in self.optim.param_groups:
             pg["lr"] = self.lr
 
-        # Then run the optimizer and zero the grads.
         self.optim.step()
         self.optim.zero_grad()
 
+    def _save_checkpoint(self, epoch: int, step_abs: int) -> None:
+        if self.checkpoint_dir is None:
+            return
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_path = (
+            self.checkpoint_dir / f"checkpoint_epoch{epoch}_step{step_abs}.pt"
+        )
+        torch.save(
+            {
+                "model_state_dict": self.model.state_dict(),
+                "optimizer_state_dict": self.optim.state_dict(),
+                "epoch": epoch,
+                "step": step_abs,
+                "loss": self.last_loss,
+            },
+            checkpoint_path,
+        )
+        print(f"Saved checkpoint to {checkpoint_path}")
+
     def train_step(self, epoch: int, step: int, input_ids: Tensor, target_ids: Tensor):
         with self.mp_context:
-            logits = self.model(input_ids)  # shape [batch, seq_len, vocab_size]
+            logits = self.model(input_ids)
             loss = self.loss_fn(logits.flatten(0, 1), target_ids.flatten(0, 1))
-        (loss / self.grad_accml_steps).backward()  # divide to propagate average
+        (loss / self.grad_accml_steps).backward()
 
-        self._optim_step(epoch, step)
+        self._optim_step()
 
-        step_abs = epoch * len(self.data_loader) + step
-        if step_abs % 100 == 0 and step_abs > 0:
-            print(f"Step {step_abs}: lr={self.lr:.2e}, Loss: {loss:.4f}")
+        self.last_loss = loss.item()
+        step_abs = self._global_step
+
+        if step_abs % self.log_every == 0 and step_abs > 0:
+            print(f"Step {step_abs}: lr={self.lr:.2e}, Loss: {self.last_loss:.4f}")
             self._test_model()
 
-        return loss.item()
+        if (
+            self.checkpoint_dir is not None
+            and step_abs % self.checkpoint_every == 0
+            and step_abs > 0
+        ):
+            self._save_checkpoint(epoch, step_abs)
+
+        self._global_step += 1
+        return self.last_loss
 
     def train_epoch(self, epoch: int):
         for step, (input_ids, target_ids) in tqdm(enumerate(self.data_loader)):
@@ -147,10 +182,10 @@ class GPTForCausalLMTrainer:
             with self.mp_context:
                 output_ids = self.model.generate(
                     input_ids,
-                    max_new_tokens=256,
+                    max_new_tokens=self.generation_tokens,
                     temperature=0.2,
-                    top_k=40,
-                    eos_token_id=self.tokenizer.encode("<|endoftext|>")[0],
+                    top_k=10,
+                    eos_token_id=self.tokenizer.encode("\n")[0],
                 )
             print("----------")
             print()

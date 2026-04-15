@@ -64,14 +64,14 @@ def train(args: argparse.Namespace) -> None:
     loss_fn = CrossEntropyLoss(ignore_index=_IGNORE_INDEX)
 
     trainer = GPTForCausalLMTrainer(
-        model,
-        tokenizer,
-        optim,
-        loss_fn,
-        args.epochs,
-        args.lr,
-        dl,
-        device,
+        model=model,
+        tokenizer=tokenizer,
+        optim=optim,
+        loss_fn=loss_fn,
+        epochs=args.epochs,
+        max_lr=args.lr,
+        data_loader=dl,
+        device=device,
         test_prompts=EVAL_PROMPTS,
         grad_accml_steps=args.grad_accml_steps,
         use_mixed_precision=args.use_mixed_precision,

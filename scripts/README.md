@@ -8,7 +8,7 @@ Training, evaluation, and finetuning scripts. All scripts accept CLI arguments â
 
 ### `pretraining/train.py`
 
-Trains GPT-2 on Wikitext-103 (streaming). Supports `small` (124M) and `medium` (355M) model sizes with cosine LR schedule, checkpointing, and periodic sample generation. Designed for cloud GPUs.
+Trains GPT-2 on Wikitext-103 (streaming). Supports `tiny`, `small` (124M), `medium` (355M), and `large` (774M) model sizes with cosine LR schedule, checkpointing, and periodic sample generation. Designed for cloud GPUs.
 
 ```bash
 uv run python scripts/pretraining/train.py
@@ -18,7 +18,7 @@ uv run python scripts/pretraining/train.py --help
 
 | Argument | Default | Description |
 |---|---|---|
-| `--model_size` | `small` | Model size (`small`, `medium`) |
+| `--model_size` | `small` | Model size (`tiny`, `small`, `medium`, `large`) |
 | `--epochs` | `1` | Number of training epochs |
 | `--batch_size` | `32` | Batch size |
 | `--lr` | `3e-4` | Peak learning rate |
@@ -28,8 +28,7 @@ uv run python scripts/pretraining/train.py --help
 | `--warmup_ratio` | `0.1` | Fraction of steps for LR warmup |
 | `--checkpoint_dir` | `checkpoints` | Directory to save checkpoints |
 | `--checkpoint_every` | `1000` | Save checkpoint every N steps |
-| `--log_every` | `100` | Log loss every N steps |
-| `--generate_every` | `100` | Generate sample text every N steps |
+| `--log_every` | `100` | Log loss and generate samples every N steps |
 | `--generation_prompt` | `I am going to the bank to` | Prompt for sample generation |
 | `--generation_tokens` | `100` | Tokens to generate in samples |
 

@@ -92,7 +92,15 @@ def train(args: argparse.Namespace) -> None:
     loss_fn = CrossEntropyLoss()
 
     trainer = GPTForCausalLMTrainer(
-        model, tokenizer, optim, loss_fn, args.epochs, args.lr, dl, device
+        model=model,
+        tokenizer=tokenizer,
+        optim=optim,
+        loss_fn=loss_fn,
+        epochs=args.epochs,
+        max_lr=args.lr,
+        data_loader=dl,
+        device=device,
+        test_prompts=["to be or not to be, that is"],
     )
     trainer.train()
 
