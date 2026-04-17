@@ -19,8 +19,10 @@ class GPTForClassification(GPT):
         )
         self.cls_head = nn.Linear(embed_dim, num_classes, bias=False)
 
-    def forward(self, token_ids: "Tensor") -> "Tensor":
-        out = super().forward(token_ids)
+    def forward(
+        self, token_ids: "Tensor", attn_mask: "Tensor | None" = None
+    ) -> "Tensor":
+        out = super().forward(token_ids, attn_mask)
         if out.ndim == 3:
             logits = self.cls_head(out[:, -1, :])  # shape [batch, embed_dim]
         elif out.ndim == 2:

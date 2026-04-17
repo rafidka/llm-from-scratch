@@ -3,31 +3,35 @@ from __future__ import annotations
 from math import sqrt
 
 import torch
-from torch import nn
-from torch import Tensor
+from torch import Tensor, nn
 
 
 def scaled_dot_product_attention(
     q: Tensor,
     k: Tensor,
     v: Tensor,
-    causal: bool,
+    causal: bool = False,
+    attn_mask: Tensor | None = None,
     return_attn_weights: bool = False,
 ) -> Tensor | tuple[Tensor, Tensor]:
     """
     Implementation of the scaled dot product as in the "Attention is All You Need" paper.
 
     Args:
-        q, k v: Well known. Their shapes should be either [batch, seq_len, embed_dim] or
-            [seq_len, embed_dim].
+        q, k v: Well known. Their shapes should be either [seq_len, embed_dim] or
+            [<one ore more batch dimensions>, seq_len, embed_dim].
+        attn_mask: A mask to apply to the attention scores. It should be of shape
+            [seq_len] or [<one ore more batch dimensions>, seq_len]. Notice that if
+            there are batch dimensions, they should be the same as the batch dimensions
+            of q, k, v.
         causal: Whether to calculate bi-directional attention, or just attend to
             previous tokens.
         return_attn_weights: Whether to return the attention weights as well, or just
             the output (after applying the attention on v.)
     """
-    # q/k/v: [batch, seq_len, embed_dim] or [seq_len, embed_dim]
+    # q/k/v: [<zero or more batch dimensions>, seq_len, embed_dim]
 
-    # scores: [..., seq_len, seq_len]
+    # scores: [<zero or more batch dimensions>, seq_len, seq_len]
     scores = q @ k.transpose(-1, -2)
     if causal:
         # If the attention is causal, each token only attends to previous tokens.
@@ -39,6 +43,18 @@ def scaled_dot_product_attention(
             diagonal=1,
         ).bool()
         scores = scores.masked_fill(mask, float("-inf"))
+    if attn_mask is not None:
+        # attention mask is of shape [<zero or more batch dimensions>, seq_len].
+        # We want to add a dimension of 1 between the batch dimensions and the seq_len
+        # dimension, so it becomes [<zero or more batch dimensions>, 1, seq_len].
+        # This way it can be broadcasted to the scores shape as follows:
+        # Attention mask shape: [<zero or more batch dimensions>,    1,    seq_len]
+        #                                                            ↓
+        # Scores shape:         [<zero or more batch dimensions>, seq_len, seq_len]
+        scores = scores.masked_fill(
+            attn_mask.unsqueeze(-2).bool().logical_not(),
+            float("-inf"),
+        )
 
     # attn_weights: [..., seq_len, seq_len]
     embed_dim = k.shape[-1]
@@ -64,11 +80,25 @@ class SingleHeadAttention(nn.Module):
         self.W_v = nn.Linear(embed_dim, embed_dim, bias=False)
         self.causal = causal
 
-    def forward(self, x: "Tensor") -> "Tensor":
-        q = self.W_q(x)
-        k = self.W_k(x)
-        v = self.W_v(x)
-        return scaled_dot_product_attention(q, k, v, self.causal)  # type: ignore
+    def forward(self, x: "Tensor", attn_mask: "Tensor | None" = None) -> "Tensor":
+        """
+        Forward pass for the single head attention.
+
+        Args:
+            x: Input tensor with shape [seq_len, embed_dim] or [batch, seq_len,
+                embed_dim].
+            attn_mask: Attention mask with shape [seq_len] or [batch, seq_len].
+
+        Returns:
+            The output tensor with shape [seq_len, embed_dim] or [batch, seq_len,
+                embed_dim].
+        """
+        q = self.W_q(x)  # shape stays the same.
+        k = self.W_k(x)  # shape stays the same.
+        v = self.W_v(x)  # shape stays the same.
+
+        # Output shape is [seq_len, embed_dim] or [batch, seq_len, embed_dim].
+        return scaled_dot_product_attention(q, k, v, self.causal, attn_mask)  # type: ignore
 
 
 class MultiHeadAttention(nn.Module):
@@ -94,7 +124,17 @@ class MultiHeadAttention(nn.Module):
         # Output projection
         self.W_o = nn.Linear(embed_dim, embed_dim)
 
-    def forward(self, x: "Tensor") -> "Tensor":
+    def forward(self, x: "Tensor", attn_mask: "Tensor | None" = None) -> "Tensor":
+        """
+        Forward pass for the multi head attention.
+
+        Args:
+            x: Input tensor with shape [batch, seq_len, embed_dim].
+            attn_mask: Attention mask with shape [batch, seq_len].
+
+        Returns:
+            The output tensor with shape [batch, seq_len, embed_dim].
+        """
         # x: [batch, seq_len, embed_dim]
         batch, seq_len, embed_dim = x.shape
 
@@ -110,7 +150,17 @@ class MultiHeadAttention(nn.Module):
         v = v.view(batch, seq_len, self.num_heads, self.head_dim)
         v = v.transpose(1, 2)  # transpose into [batch, num_heads, seq_len, head_dim]
 
-        attn = scaled_dot_product_attention(q, k, v, self.causal)  # type: ignore[assignment]
+        if attn_mask is not None:
+            # Since this is a multi head attention, the q/k/v tensors became of shape
+            # [batch, num_heads, seq_len, head_dim]. The scaled_dot_product_attention,
+            # however, expects the attention mask to have the same batch dimensions as
+            # the q/k/v tensors. Thus, we add a dimension to the attention mask to make
+            # it of shape [batch, 1, seq_len]. Broadcasting will then take care of
+            # replicating the attention mask for each head.
+            attn_mask = attn_mask.unsqueeze(-2)
+
+        attn = scaled_dot_product_attention(q, k, v, self.causal, attn_mask)  # type: ignore[assignment]
         attn = attn.transpose(1, 2).contiguous().view(batch, seq_len, embed_dim)  # type: ignore[union-attr]
 
-        return self.W_o(attn)  # output: [batch, seq_len, embed_dim]
+        # Output shape: [batch, seq_len, embed_dim].
+        return self.W_o(attn)

@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_seq_len", type=int, default=1024)
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--num_classes", type=int, default=2)
+    parser.add_argument("--eval_every_step", type=int, default=500)
     return parser.parse_args()
 
 
@@ -66,6 +67,7 @@ def train(args: argparse.Namespace) -> None:
         data_loader=train_dl,
         device=device,
         eval_loader=eval_dl,
+        eval_every_step=args.eval_every_step,
     )
     trainer.train()
 

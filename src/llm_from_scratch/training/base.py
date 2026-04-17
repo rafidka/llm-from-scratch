@@ -1,10 +1,11 @@
 import contextlib
 import math
+from abc import abstractmethod
 from pathlib import Path
 from typing import Generic, TypeVar
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 from torch.nn import CrossEntropyLoss
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
@@ -132,11 +133,29 @@ class GPTTrainer(Generic[M]):
 
         self._global_step += 1
 
+    @abstractmethod
+    def train_step(
+        self,
+        epoch: int,
+        step: int,
+        input_ids: Tensor,
+        targets: Tensor,
+        attention_mask: Tensor | None = None,
+    ):
+        pass
+
     def train_epoch(self, epoch: int):
         for step, batch in tqdm(enumerate(self.data_loader)):
             input_ids = batch[0].to(self.device)
             targets = batch[1].to(self.device)
-            self.train_step(epoch, step, input_ids, targets)
+            attention_mask = batch[2].to(self.device) if len(batch) > 2 else None
+            self.train_step(
+                epoch,
+                step,
+                input_ids,
+                targets,
+                attention_mask=attention_mask,
+            )
 
     def train(self):
         for epoch in range(self.epochs):

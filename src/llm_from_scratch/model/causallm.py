@@ -27,8 +27,10 @@ class GPTForCausalLM(GPT):
         # Weight tying between token embeddings and lm_head
         self.lm_head.weight = self.embedding.token.weight
 
-    def forward(self, token_ids: "Tensor") -> "Tensor":
-        out = super().forward(token_ids)
+    def forward(
+        self, token_ids: "Tensor", attn_mask: "Tensor | None" = None
+    ) -> "Tensor":
+        out = super().forward(token_ids, attn_mask)
         logits = self.lm_head(out)
         return logits  # shape [batch, seq_len, vocab_size]
 

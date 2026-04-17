@@ -79,8 +79,8 @@ def create_dataloader(hf_dataset, tokenizer, batch_size, max_seq_len):
         padded_target_ids = pad_sequence(
             target_ids, batch_first=True, padding_value=_IGNORE_INDEX
         )
-
-        return padded_input_ids, padded_target_ids
+        attention_mask = (padded_input_ids != 0).long()
+        return padded_input_ids, padded_target_ids, attention_mask
 
     dataset = DatasetForInstructionFineTuning(hf_dataset, tokenizer, max_seq_len)
     return DataLoader(

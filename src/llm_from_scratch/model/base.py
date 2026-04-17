@@ -35,10 +35,10 @@ class TransformerBlock(nn.Module):
         self.ln2 = nn.LayerNorm(embed_dim)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: "Tensor") -> "Tensor":
+    def forward(self, x: "Tensor", attn_mask: "Tensor | None" = None) -> "Tensor":
         # x: [batch, seq_len, embed_dim]
         out = x
-        out = out + self.dropout(self.attn(self.ln1(out)))
+        out = out + self.dropout(self.attn(self.ln1(out), attn_mask))
         out = out + self.dropout(self.ff(self.ln2(out)))
         return out
 
@@ -64,11 +64,8 @@ class GPT(nn.Module):
         self.dropout = dropout
 
         self.embedding = GPTEmbeddings(vocab_size, embed_dim, max_seq_len)
-        self.transformer_blocks = nn.Sequential(
-            *[
-                TransformerBlock(embed_dim, num_heads, dropout)
-                for _ in range(num_layers)
-            ]
+        self.transformer_blocks = nn.ModuleList(
+            [TransformerBlock(embed_dim, num_heads, dropout) for _ in range(num_layers)]
         )
         self.ln = nn.LayerNorm(embed_dim)
 
@@ -124,11 +121,14 @@ class GPT(nn.Module):
             dropout=0.1,
         )
 
-    def forward(self, token_ids: "Tensor") -> "Tensor":
+    def forward(
+        self, token_ids: "Tensor", attn_mask: "Tensor | None" = None
+    ) -> "Tensor":
         # token_ids: [batch, seq_len]
         if len(token_ids.shape) != 2:
             raise RuntimeError("Expecting token_ids to be of shape (batch, seq_len).")
         out = self.embedding(token_ids)
-        out = self.transformer_blocks(out)
+        for block in self.transformer_blocks:
+            out = block(out, attn_mask)
         out = self.ln(out)
         return out  # todo what is the shape?

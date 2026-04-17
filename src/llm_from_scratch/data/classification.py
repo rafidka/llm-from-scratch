@@ -1,6 +1,6 @@
-import torch
 from typing import Any, Iterator
 
+import torch
 from torch import Tensor, tensor
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, IterableDataset
@@ -91,8 +91,8 @@ def create_dataloader(hf_dataset, tokenizer, batch_size, max_text_len):
         # Pad sequences to match the longest one in this batch
         # batch_first=True makes shape (Batch, Seq_Len, Features)
         padded_sequences = pad_sequence(sequences, batch_first=True, padding_value=0)
-
-        return padded_sequences, labels
+        attention_mask = (padded_sequences != 0).long()
+        return padded_sequences, labels, attention_mask
 
     dataset = DatasetForClassification(hf_dataset, tokenizer, max_text_len)
     return DataLoader(

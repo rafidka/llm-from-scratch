@@ -1,12 +1,12 @@
 from itertools import islice
 
 import torch
-from tqdm import tqdm
 from torch import Tensor
 from torch.nn import CrossEntropyLoss
 from torch.nn.utils.rnn import pad_sequence
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from llm_from_scratch.model.classification import GPTForClassification
 from llm_from_scratch.tokenizers.base import Tokenizer
@@ -54,10 +54,17 @@ class GPTForClassificationTrainer(GPTTrainer[GPTForClassification]):
         self.eval_loader = eval_loader
         self.eval_every_step = eval_every_step
 
-    def train_step(self, epoch: int, step: int, input_ids: Tensor, target_cls: Tensor):
+    def train_step(
+        self,
+        epoch: int,
+        step: int,
+        input_ids: Tensor,
+        targets: Tensor,
+        attention_mask: Tensor | None = None,
+    ):
         with self.mp_context:
-            logits = self.model(input_ids)
-            loss = self.loss_fn(logits, target_cls)
+            logits = self.model(input_ids, attention_mask)
+            loss = self.loss_fn(logits, targets)
         (loss / self.grad_accml_steps).backward()
 
         self._optim_step()
@@ -91,8 +98,10 @@ class GPTForClassificationTrainer(GPTTrainer[GPTForClassification]):
                 batch_first=True,
                 padding_value=0,
             )
+            attention_mask = (input_ids != 0).long()
             input_ids = input_ids.to(self.device)
-            logits = self.model(input_ids)
+            attention_mask = attention_mask.to(self.device)
+            logits = self.model(input_ids, attention_mask)
             preds = logits.argmax(dim=-1)
             for text, pred in zip(texts, preds):
                 label = "Positive" if pred.item() == 1 else "Negative"
@@ -106,18 +115,21 @@ class GPTForClassificationTrainer(GPTTrainer[GPTForClassification]):
             self.model.eval()
             all_true_labels = torch.empty((0), device=self.device)
             all_pred_labels = torch.empty((0), device=self.device)
-            for input_ids, true_labels in tqdm(islice(self.eval_loader, 100)):
+            for input_ids, true_labels, attention_mask in tqdm(
+                islice(self.eval_loader, 100)
+            ):
                 input_ids = input_ids.to(self.device)
                 true_labels = true_labels.to(self.device)
-                pred_labels = self.model(input_ids).argmax(dim=-1)
+                attention_mask = attention_mask.to(self.device)
+                pred_labels = self.model(input_ids, attention_mask).argmax(dim=-1)
 
                 all_true_labels = torch.cat((all_true_labels, true_labels))
                 all_pred_labels = torch.cat((all_pred_labels, pred_labels))
 
-        tp = ((pred_labels == 1) & (true_labels == 1)).sum().item()
-        tn = ((pred_labels == 0) & (true_labels == 0)).sum().item()
-        fp = ((pred_labels == 1) & (true_labels == 0)).sum().item()
-        fn = ((pred_labels == 0) & (true_labels == 1)).sum().item()
+        tp = ((all_pred_labels == 1) & (all_true_labels == 1)).sum().item()
+        tn = ((all_pred_labels == 0) & (all_true_labels == 0)).sum().item()
+        fp = ((all_pred_labels == 1) & (all_true_labels == 0)).sum().item()
+        fn = ((all_pred_labels == 0) & (all_true_labels == 1)).sum().item()
 
         accuracy = (tp + tn) / (tp + tn + fp + fn) if tp + tn + fp + fn > 0 else 0.0
         precision = tp / (tp + fp) if tp + fp > 0 else 0.0

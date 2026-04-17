@@ -50,9 +50,16 @@ class GPTForCausalLMTrainer(GPTTrainer[GPTForCausalLM]):
         self.test_prompts = test_prompts
         self.generation_tokens = generation_tokens
 
-    def train_step(self, epoch: int, step: int, input_ids: Tensor, target_ids: Tensor):
+    def train_step(
+        self,
+        epoch: int,
+        step: int,
+        input_ids: Tensor,
+        target_ids: Tensor,
+        attention_mask: Tensor | None = None,
+    ):
         with self.mp_context:
-            logits = self.model(input_ids)
+            logits = self.model(input_ids, attention_mask)
             loss = self.loss_fn(logits.flatten(0, 1), target_ids.flatten(0, 1))
         (loss / self.grad_accml_steps).backward()
 

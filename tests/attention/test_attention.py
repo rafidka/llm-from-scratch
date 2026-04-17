@@ -47,6 +47,89 @@ class TestScaledDotProductAttention:
             upper_triangle, torch.zeros_like(upper_triangle), atol=1e-6
         )
 
+    def test_attention_mask_blocks_positions(self):
+        batch, seq_len, embed_dim = 1, 4, 8
+        q = torch.randn(batch, seq_len, embed_dim)
+        k = torch.randn(batch, seq_len, embed_dim)
+        v = torch.randn(batch, seq_len, embed_dim)
+        attn_mask = torch.tensor([[1, 1, 0, 0]])
+
+        _, attn_weights = scaled_dot_product_attention(
+            q, k, v, attn_mask=attn_mask, return_attn_weights=True
+        )
+
+        assert torch.allclose(
+            attn_weights[0, :, 2:], torch.zeros_like(attn_weights[0, :, 2:]), atol=1e-6
+        )
+
+    def test_attention_mask_with_batch(self):
+        batch, seq_len, embed_dim = 2, 3, 4
+        q = torch.randn(batch, seq_len, embed_dim)
+        k = torch.randn(batch, seq_len, embed_dim)
+        v = torch.randn(batch, seq_len, embed_dim)
+        attn_mask = torch.tensor([[1, 1, 0], [1, 0, 0]])
+
+        _, attn_weights = scaled_dot_product_attention(
+            q, k, v, attn_mask=attn_mask, return_attn_weights=True
+        )
+
+        assert torch.allclose(attn_weights[0, :, 2], torch.zeros(seq_len), atol=1e-6)
+        assert torch.allclose(
+            attn_weights[1, :, 1:], torch.zeros(seq_len, 2), atol=1e-6
+        )
+
+    def test_attention_mask_with_causal(self):
+        batch, seq_len, embed_dim = 1, 4, 8
+        q = torch.randn(batch, seq_len, embed_dim)
+        k = torch.randn(batch, seq_len, embed_dim)
+        v = torch.randn(batch, seq_len, embed_dim)
+        attn_mask = torch.tensor([[1, 1, 1, 0]])
+
+        _, attn_weights = scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=attn_mask,
+            causal=True,
+            return_attn_weights=True,
+        )
+
+        assert torch.allclose(attn_weights[0, :, 3], torch.zeros(seq_len), atol=1e-6)
+        upper_mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
+        assert torch.allclose(
+            attn_weights[0][upper_mask],
+            torch.zeros(int(upper_mask.sum().item())),
+            atol=1e-6,
+        )
+
+    def test_attention_mask_rows_sum_to_one(self):
+        batch, seq_len, embed_dim = 1, 4, 8
+        q = torch.randn(batch, seq_len, embed_dim)
+        k = torch.randn(batch, seq_len, embed_dim)
+        v = torch.randn(batch, seq_len, embed_dim)
+        attn_mask = torch.tensor([[1, 1, 1, 0]])
+
+        _, attn_weights = scaled_dot_product_attention(
+            q, k, v, attn_mask=attn_mask, return_attn_weights=True
+        )
+
+        row_sums = attn_weights.sum(dim=-1)
+        assert torch.allclose(row_sums, torch.ones_like(row_sums), atol=1e-5)
+
+    def test_attention_mask_no_mask_equals_unmasked(self):
+        batch, seq_len, embed_dim = 2, 4, 8
+        q = torch.randn(batch, seq_len, embed_dim)
+        k = torch.randn(batch, seq_len, embed_dim)
+        v = torch.randn(batch, seq_len, embed_dim)
+        all_ones_mask = torch.ones(batch, seq_len)
+
+        out_unmasked = scaled_dot_product_attention(q, k, v, causal=False)
+        out_masked = scaled_dot_product_attention(
+            q, k, v, attn_mask=all_ones_mask, causal=False
+        )
+
+        assert torch.allclose(out_unmasked, out_masked, atol=1e-6)
+
 
 class TestSingleHeadAttention:
     def test_output_shape(self):
