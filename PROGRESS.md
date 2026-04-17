@@ -512,3 +512,40 @@
 
 ### Open questions
 - Next: Training efficiency deep dive (gradient accumulation, mixed precision, length-grouped batching, gradient checkpointing)
+
+---
+
+## Session 19 — 2026-04-17 — Bug Fixes and Attention Masks
+
+### What we covered
+- Reviewed and fixed 8 issues from IssuesToWorkOn.md
+- Implemented weight tying between token embeddings and lm_head in GPTForCausalLM
+- Implemented attention mask support throughout the entire model stack
+- Added unit tests for attention mask behavior
+
+### Key learnings
+- Weight tying: `lm_head.weight = embedding.token.weight` shares parameters, saving ~38M params for GPT-2 Small and ensuring consistency when fine-tuning from pretrained weights
+- `max_token_value + 1` for vocab_size is fragile — should use `n_vocab` instead
+- Attention masks must be threaded through: data pipeline → model forward → transformer blocks → multi-head attention → scaled dot product attention
+- `nn.Sequential` doesn't support extra kwargs — must use `nn.ModuleList` with manual iteration
+- Mask shape contract: `scaled_dot_product_attention` expects mask with same batch dims as q/k/v; `MultiHeadAttention` reshapes `(batch, seq_len)` → `(batch, 1, seq_len)` to match its `(batch, num_heads, seq_len, head_dim)` input
+- `GPTForCausalLM.generate()` needs to grow the attention mask alongside token_ids during autoregressive decoding
+
+### Code written
+- Fixed `GPTForClassification.forward()` ndim==2 case
+- Fixed `TiktokenTokenizer.vocab_size` to use `n_vocab`
+- Cached tokenized samples in `DatasetForClassification.__init__`
+- Vectorized confusion matrix computation in `GPTForClassificationTrainer.eval()`
+- Documented `dropout=0.0` in `GPT.tiny()` docstring
+- Added shuffle support to `StreamingLLMDataset`
+- Added weight tying in `GPTForCausalLM` (`lm_head.weight = embedding.token.weight`)
+- Added `attn_mask` parameter: `scaled_dot_product_attention`, `SingleHeadAttention`, `MultiHeadAttention`, `TransformerBlock`, `GPT`, `GPTForCausalLM`, `GPTForClassification`
+- Replaced `nn.Sequential` with `nn.ModuleList` for transformer blocks
+- Added attention mask creation in classification and instruction data pipelines
+- Updated trainers to thread attention masks
+- Added `attn_mask` to `GPTForCausalLM.generate()` with mask growing logic
+- Added 5 unit tests for attention mask behavior (blocking positions, batch masks, causal+mask, row sums, no-mask equivalence)
+
+### PLAN.md items completed
+- [x] Weight tying between token embeddings and lm_head (issue 3)
+- [x] Attention mask support for padded tokens (issue 2)
