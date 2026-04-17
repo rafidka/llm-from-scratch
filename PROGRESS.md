@@ -549,3 +549,45 @@
 ### PLAN.md items completed
 - [x] Weight tying between token embeddings and lm_head (issue 3)
 - [x] Attention mask support for padded tokens (issue 2)
+
+---
+
+## Retroactive Entry — 2026-04-08 to 2026-04-15 — Cloud Infra, Refactoring & Training Efficiency
+
+### What we covered
+- Created `StreamingLLMDataset` (PyTorch `IterableDataset`) for lazy tokenization of HuggingFace streaming datasets, avoiding loading all tokens into memory
+- Added periodic sample generation during training (configurable prompt, frequency, and token count)
+- Refactored the model hierarchy: split `GPT` into a base class (returns hidden states, no LM head) and `GPTForCausalLM(GPT)` / `GPTForClassification(GPT)` subclasses
+- Restructured the repo: moved `examples/` out of `src/`, created `scripts/` for training runs, added `argparse`-based CLI for all training scripts, added `get_device()` utility
+- Extracted `GPTTrainer[M]` generic base class with template method pattern, eliminating duplicated training logic between `GPTForCausalLMTrainer` and `GPTForClassificationTrainer`
+- Added gradient accumulation support (`grad_accml_steps`) to `GPTForCausalLMTrainer` — loss divided by accumulation steps, optimizer only steps after accumulating enough micro-batches
+- Added mixed precision training (bfloat16 via `torch.autocast`) to `GPTForCausalLMTrainer`
+- Added cloud training infrastructure: `train.sh` launcher, PyTorch CUDA 12.8 index in `pyproject.toml`, `setup_vast_pod.sh` and `sync.sh` for vast.ai
+
+### Key learnings
+- `IterableDataset` + `DataLoader(num_workers=0)` is the pattern for streaming datasets that can't fit in memory
+- Gradient accumulation: divide loss by `grad_accml_steps` before `.backward()`, only call `optim.step()` + `zero_grad()` every N micro-batches — effectively simulates larger batch sizes
+- Mixed precision with `torch.autocast(device_type="cuda", dtype=torch.bfloat16)` reduces memory usage and speeds up training on modern GPUs
+- Template method pattern with `Generic`/`TypeVar` lets Python trainers share common logic while subclass hooks (`_on_log_step`, `_on_train_step_end`) customize behavior
+
+### Code written
+- `src/llm_from_scratch/data/dataset.py` — `StreamingLLMDataset` class with lazy tokenization and token buffer
+- `src/llm_from_scratch/model/base.py` — `GPT` base class (refactored from `transformer.py`)
+- `src/llm_from_scratch/model/causallm.py` — `GPTForCausalLM(GPT)` with `lm_head` and `generate()`
+- `src/llm_from_scratch/model/classification.py` — `GPTForClassification(GPT)` with classification head
+- `src/llm_from_scratch/training/base.py` — `GPTTrainer[M]` base class with LR schedule, gradient accumulation, mixed precision, checkpointing
+- `src/llm_from_scratch/training/causallm.py` — `GPTForCausalLMTrainer` refactored to extend `GPTTrainer`
+- `src/llm_from_scratch/training/classification.py` — `GPTForClassificationTrainer` refactored to extend `GPTTrainer`
+- `src/llm_from_scratch/utils.py` — `get_device()` utility
+- `scripts/` — Training scripts with `argparse` CLI (pretraining, finetuning, evaluation)
+- `setup_vast_pod.sh`, `sync.sh`, `.syncignore` — vast.ai infrastructure
+- `train.sh` — Cloud training launcher
+- `pyproject.toml` — PyTorch CUDA 12.8 wheel index
+
+### PLAN.md items completed
+- [x] Gradient accumulation
+- [x] Mixed precision training
+
+### Open questions
+- Gradient checkpointing still TODO
+- Length-grouped batching still TODO

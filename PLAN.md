@@ -62,8 +62,8 @@ heavy training offloaded to cloud GPUs.
 - [x] Training on a small corpus locally (MacBook MPS)
 - [x] Evaluate with sample generation
 - [x] Train a larger model on cloud GPU (in progress on RTX 3090)
-- [ ] **Deep dive**: Gradient accumulation for effective larger batch sizes
-- [ ] **Deep dive**: Mixed precision training
+- [x] **Deep dive**: Gradient accumulation for effective larger batch sizes
+- [x] **Deep dive**: Mixed precision training
 
 ---
 
