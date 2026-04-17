@@ -24,7 +24,7 @@ Neither the attention module nor the model supports attention masks (padding mas
 
 ## Architecture Issues
 
-### 3. No weight tying between token embeddings and `lm_head`
+### 3. No weight tying between token embeddings and `lm_head` ✅ Fixed
 
 GPT-2 ties `wte` and `lm_head` weights. Your `GPTForCausalLM` has separate parameters:
 
