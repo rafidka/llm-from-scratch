@@ -13,12 +13,14 @@ For a 2D input (no batch dim), this takes all tokens instead of the last token's
 
 **Fixed:** Changed to `self.cls_head(out[-1, :])` in `classification.py`.
 
-### 2. No attention mask support — padded tokens corrupt attention
+### 2. No attention mask support — padded tokens corrupt attention ✅ Fixed
 
 Neither the attention module nor the model supports attention masks (padding masks). This means:
 - Classification and instruction fine-tuning with padded batches treats padding tokens as real tokens.
 - `CrossEntropyLoss(ignore_index=-100)` masks the *loss* but not the *attention* — the model still attends to padding.
 - This is a correctness issue for all fine-tuning paths with variable-length sequences.
+
+**Fixed:** Added `attn_mask` parameter throughout the stack: `scaled_dot_product_attention` → `MultiHeadAttention` → `TransformerBlock` → `GPT` → model classes. Data pipelines (classification, instruction) now produce attention masks. `generate()` supports growing masks. Trainers thread masks through.
 
 ## Architecture Issues
 

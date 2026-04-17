@@ -22,13 +22,12 @@ def evaluate_perplexity(
     model.eval()
     model.to(device)
     with torch.no_grad():
-        for idx, (input_ids, target_ids) in enumerate(
-            tqdm(islice(dataloader, max_steps))
-        ):
-            input_ids = input_ids.to(device)
-            target_ids = target_ids.to(device)
+        for idx, batch in enumerate(tqdm(islice(dataloader, max_steps))):
+            input_ids = batch[0].to(device)
+            target_ids = batch[1].to(device)
+            attn_mask = batch[2].to(device) if len(batch) > 2 else None
 
-            logits = model(input_ids)
+            logits = model(input_ids, attn_mask)
             loss = loss_fn(logits.flatten(0, 1), target_ids.flatten(0, 1))
             losses.append(loss.item())
 

@@ -38,16 +38,20 @@ class GPTForCausalLM(GPT):
         self,
         token_ids: "Tensor",
         max_new_tokens: int,
+        attn_mask: "Tensor | None" = None,
         temperature: float = 1.0,
         top_k: int | None = None,
         eos_token_id: int | None = None,
     ):
         # token_ids: [batch, seq_len]
+        # attn_mask: [batch, seq_len] or None
         for _ in range(max_new_tokens):
             if token_ids.shape[-1] >= self.max_seq_len:
                 token_ids = token_ids[:, -self.max_seq_len :]
+                if attn_mask is not None:
+                    attn_mask = attn_mask[:, -self.max_seq_len :]
 
-            logits = self.forward(token_ids)
+            logits = self.forward(token_ids, attn_mask)
             last_logit = logits[:, -1, :]
 
             if temperature == 0:
@@ -69,6 +73,9 @@ class GPTForCausalLM(GPT):
                     next_tokens = torch.multinomial(probs, num_samples=1)
 
             token_ids = torch.cat((token_ids, next_tokens), dim=-1)
+            if attn_mask is not None:
+                ones = torch.ones_like(next_tokens)
+                attn_mask = torch.cat((attn_mask, ones), dim=-1)
 
             if eos_token_id is not None and (next_tokens == eos_token_id).all():
                 break
