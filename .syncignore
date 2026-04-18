@@ -18,5 +18,8 @@ build/
 # Downloaded data (large, not needed for sync)
 /data/
 
+# Checkpoints (handled by separate session)
+/checkpoints/
+
 # Sync tool artifacts (prevent loops)
 .syncignore
