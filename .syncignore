@@ -1,6 +1,3 @@
-# Version control
-.git/
-
 # Python
 __pycache__/
 *.py[cod]
@@ -11,8 +8,7 @@ build/
 # Virtual environments
 .venv/
 
-# IDE / tooling
-.vscode/
+# tooling
 .ruff_cache/
 .pytest_cache/
 
