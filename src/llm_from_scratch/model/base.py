@@ -63,7 +63,7 @@ class GPT(nn.Module):
         self.max_seq_len = max_seq_len
         self.dropout = dropout
 
-        self.embedding = GPTEmbeddings(vocab_size, embed_dim, max_seq_len)
+        self.embeddings = GPTEmbeddings(vocab_size, embed_dim, max_seq_len)
         self.transformer_blocks = nn.ModuleList(
             [TransformerBlock(embed_dim, num_heads, dropout) for _ in range(num_layers)]
         )
@@ -127,8 +127,8 @@ class GPT(nn.Module):
         # token_ids: [batch, seq_len]
         if len(token_ids.shape) != 2:
             raise RuntimeError("Expecting token_ids to be of shape (batch, seq_len).")
-        out = self.embedding(token_ids)
+        out = self.embeddings(token_ids)
         for block in self.transformer_blocks:
             out = block(out, attn_mask)
         out = self.ln(out)
-        return out  # todo what is the shape?
+        return out  # [batch, seq_len, embed_dim]

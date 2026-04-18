@@ -1,0 +1,104 @@
+{
+    "configurations": [
+        {
+            "name": "BPE",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/tokenizers/bpe.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+        },
+        {
+            "name": "LLMDataset",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/data/dataset.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+        },
+        {
+            "name": "Trainer",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/llm_from_scratch/examples/training/trainer.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+        },
+        {
+            "name": "pretraining_tiny",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/pretraining/train_tiny.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": []
+        },
+        {
+            "name": "pretraining",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/pretraining/train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--model_size",
+                "small",
+                "--epochs",
+                "1",
+                "--batch_size",
+                "4",
+                "--log_every",
+                "10",
+                "--checkpoint_every",
+                "50"
+            ]
+        },
+        {
+            "name": "load_pretrained",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/llm_from_scratch/examples/model/load_pretrianed.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": []
+        },
+        {
+            "name": "evaluate_gpt2_hf",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/llm_from_scratch/examples/pretrained/evaluate_gpt2_hf.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": []
+        },
+        {
+            "name": "classification",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/finetuning/classification.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--base_model",
+                "gpt2",
+                "--epochs",
+                "1",
+                "--lr",
+                "3e-4",
+                "--batch_size",
+                "2",
+                "--eval_every_step",
+                "1",
+            ]
+        },
+        {
+            "name": "instruction-fine-tuning",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/training/instruction.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": []
+        }
+    ]
+}

@@ -25,7 +25,7 @@ class GPTForCausalLM(GPT):
 
         self.lm_head = nn.Linear(embed_dim, vocab_size, bias=False)
         # Weight tying between token embeddings and lm_head
-        self.lm_head.weight = self.embedding.token.weight
+        self.lm_head.weight = self.embeddings.token.weight
 
     def forward(
         self, token_ids: "Tensor", attn_mask: "Tensor | None" = None
@@ -34,6 +34,7 @@ class GPTForCausalLM(GPT):
         logits = self.lm_head(out)
         return logits  # shape [batch, seq_len, vocab_size]
 
+    @torch.no_grad()
     def generate(
         self,
         token_ids: "Tensor",
@@ -42,7 +43,7 @@ class GPTForCausalLM(GPT):
         temperature: float = 1.0,
         top_k: int | None = None,
         eos_token_id: int | None = None,
-    ):
+    ) -> "Tensor":
         # token_ids: [batch, seq_len]
         # attn_mask: [batch, seq_len] or None
         for _ in range(max_new_tokens):

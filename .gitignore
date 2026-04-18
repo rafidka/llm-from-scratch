@@ -10,7 +10,11 @@ wheels/
 .venv
 
 # IDE settings
-.vscode/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
 
 # Downloaded data
 /data/

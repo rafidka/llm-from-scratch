@@ -176,9 +176,9 @@ def load_weights(model: GPT | GPTForCausalLM, hf_model: GPT2LMHeadModel) -> None
     hf: Any = hf_model.transformer
 
     with torch.no_grad():
-        model.embedding.token.weight.copy_(hf.wte.weight)
-        model.embedding.positional.weight.copy_(hf.wpe.weight)
+        model.embeddings.token.weight.copy_(hf.wte.weight)
 
+        model.embeddings.positional.weight.copy_(hf.wpe.weight)
         for i in range(model.num_layers):
             our_block = cast(TransformerBlock, model.transformer_blocks[i])
             hf_block: Any = hf.h[i]
