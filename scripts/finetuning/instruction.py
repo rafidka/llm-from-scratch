@@ -32,7 +32,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=5e-5)
-    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--batch_size", type=int, default=None)
+    parser.add_argument("--max_tokens_per_batch", type=int, default=None)
     parser.add_argument("--max_seq_len", type=int, default=1024)
     parser.add_argument("--stride", type=int, default=512)
     parser.add_argument("--weight_decay", type=float, default=0.01)
@@ -52,7 +53,24 @@ def train(args: argparse.Namespace) -> None:
 
     tokenizer = TiktokenTokenizer()
     ds = load_dataset("tatsu-lab/alpaca")
-    dl = create_dataloader(ds["train"], tokenizer, args.batch_size, args.max_seq_len)
+    if args.batch_size and args.max_tokens_per_batch:
+        raise RuntimeError("Cannot specify both batch_size and max_tokens_per_batch")
+    elif args.max_tokens_per_batch:
+        dl = create_dataloader(
+            ds["train"],
+            tokenizer,
+            args.max_seq_len,
+            max_tokens_per_batch=args.max_tokens_per_batch,
+        )
+    elif args.batch_size:
+        dl = create_dataloader(
+            ds["train"],
+            tokenizer,
+            args.max_seq_len,
+            batch_size=args.batch_size or 8,
+        )
+    else:
+        raise RuntimeError("Need to specify either batch_size or max_tokens_per_batch")
 
     model = load_pretrained_lm(args.base_model, max_seq_len=args.max_seq_len)
     model.to(device)
@@ -75,6 +93,8 @@ def train(args: argparse.Namespace) -> None:
         test_prompts=EVAL_PROMPTS,
         grad_accml_steps=args.grad_accml_steps,
         use_mixed_precision=args.use_mixed_precision,
+        checkpoint_dir="./checkpoints",
+        checkpoint_every=1500,
     )
     trainer.train()
 

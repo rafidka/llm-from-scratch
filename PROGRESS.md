@@ -591,3 +591,36 @@
 ### Open questions
 - Gradient checkpointing still TODO
 - Length-grouped batching still TODO
+
+---
+
+## Session 20 — 2026-04-19 — Length-Grouped Batching
+
+### What we covered
+- Implemented `MaxTokenCountBatchSampler` — sorts dataset by sequence length (with noise for randomization), groups similar-length items into batches, dynamically sizes batches to fit within a token budget
+- Batch-level shuffling ensures the model doesn't see all short sequences before all long ones
+- Per-batch shuffling randomizes item order within each batch
+- Refactored `create_dataloader` to support either `batch_size` (fixed) or `max_tokens_per_batch` (dynamic)
+- Added attention mask creation in collate function (`padded_input_ids != 0`)
+- Wired attention masks through the entire pipeline: collate_fn → train_step → model → attention
+
+### Key learnings
+- Length-grouped batching reduces padding waste by grouping similar-length sequences in the same batch
+- Without grouping, `[900, 50, 50, 50]` gets padded to 4×900 = 3600 tokens; with grouping, short and long sequences go into separate batches
+- By itself, length-grouping doesn't fix OOM — it helps with speed and predictable memory usage
+- Dynamic batch sizing (token budget) is what actually fixes OOM: fewer long sequences per batch, more short ones
+- Adding random noise to lengths before sorting ensures same-length items aren't always in the same order
+- Shuffling batch order prevents the model from seeing a length-biased data stream
+- Attention masks tell the model to ignore padding tokens, preventing them from influencing hidden states
+
+### Code written
+- `src/llm_from_scratch/data/instruction.py` — `MaxTokenCountBatchSampler`, `_pad_sequences_fn` with attention masks, refactored `create_dataloader` with dispatch
+- `src/llm_from_scratch/model/causallm.py` — `generate()` now accepts and grows `attn_mask`, zeros out tokens after EOS
+- `src/llm_from_scratch/training/causallm.py` — `train_step` now accepts and passes `attention_mask`, batched generation in `_test_model`
+- `scripts/finetuning/instruction.py` — Updated CLI with `--max_tokens_per_batch`
+
+### PLAN.md items completed
+- [x] Length-grouped batching with dynamic batch sizing
+
+### Open questions
+- Next: Gradient checkpointing

@@ -80,4 +80,11 @@ class GPTForCausalLM(GPT):
 
             if eos_token_id is not None and (next_tokens == eos_token_id).all():
                 break
+
+        # Zero out all the tokens after EOS.
+        if eos_token_id is not None:
+            # after_eos will be True on and after first EOS
+            after_eos = (token_ids == eos_token_id).cumsum(dim=1) >= 1
+            token_ids.masked_fill(after_eos, 0)
+
         return token_ids

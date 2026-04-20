@@ -1,4 +1,5 @@
 import torch
+from torch.nn.utils.rnn import pad_sequence
 from torch import Tensor
 from torch.nn import CrossEntropyLoss
 from torch.optim import Optimizer
@@ -78,21 +79,28 @@ class GPTForCausalLMTrainer(GPTTrainer[GPTForCausalLM]):
         if not self.test_prompts:
             return
         self.model.eval()
-        for prompt in self.test_prompts:
-            input_ids = (
-                torch.tensor(self.tokenizer.encode(prompt)).view(1, -1).to(self.device)
+
+        input_ids = pad_sequence(
+            [
+                torch.tensor(self.tokenizer.encode(prompt), device=self.device)
+                for prompt in self.test_prompts
+            ],
+            batch_first=True,
+            padding_value=0,
+        )
+
+        with self.mp_context:
+            output_ids = self.model.generate(
+                input_ids,
+                max_new_tokens=self.generation_tokens,
+                temperature=0.2,
+                top_k=40,
+                eos_token_id=self.tokenizer.encode("<|endoftext|>")[0],
             )
-            with self.mp_context:
-                output_ids = self.model.generate(
-                    input_ids,
-                    max_new_tokens=self.generation_tokens,
-                    temperature=0.2,
-                    top_k=40,
-                    eos_token_id=self.tokenizer.encode("\n")[0],
-                )
+        for output in output_ids:
             print("----------")
             print()
-            print(self.tokenizer.decode(output_ids[0].tolist()))
-        print()
-        print("----------")
-        self.model.train()
+            print(self.tokenizer.decode(output.tolist()))
+            print()
+            print("----------")
+            self.model.train()

@@ -95,10 +95,16 @@
             "name": "instruction-fine-tuning",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/examples/training/instruction.py",
+            "program": "${workspaceFolder}/scripts/finetuning/instruction.py",
             "console": "integratedTerminal",
             "justMyCode": false,
-            "args": []
+            "args": [
+                "--grad_accml_steps",
+                "10",
+                "--use_mixed_precision",
+                "--max_tokens_per_batch",
+                "4096",
+            ]
         }
     ]
 }
