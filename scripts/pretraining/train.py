@@ -47,6 +47,12 @@ def parse_args() -> argparse.Namespace:
         default=100,
         help="Number of tokens to generate in samples",
     )
+    parser.add_argument(
+        "--use_gradient_checkpointing",
+        action="store_true",
+        default=False,
+        help="Enable mixed precision training (requires CUDA)",
+    )
     return parser.parse_args()
 
 
@@ -59,15 +65,36 @@ def init_weights(module: nn.Module) -> None:
         nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
 
-def create_model(model_size: str, vocab_size: int, max_seq_len: int) -> GPTForCausalLM:
+def create_model(
+    model_size: str,
+    vocab_size: int,
+    max_seq_len: int,
+    use_gradient_checkpointing: bool = False,
+) -> GPTForCausalLM:
     if model_size == "tiny":
-        return GPTForCausalLM.tiny(vocab_size, max_seq_len)
+        return GPTForCausalLM.tiny(
+            vocab_size,
+            max_seq_len,
+            use_gradient_checkpointing,
+        )
     elif model_size == "small":
-        return GPTForCausalLM.small(vocab_size, max_seq_len)
+        return GPTForCausalLM.small(
+            vocab_size,
+            max_seq_len,
+            use_gradient_checkpointing,
+        )
     elif model_size == "medium":
-        return GPTForCausalLM.medium(vocab_size, max_seq_len)
+        return GPTForCausalLM.medium(
+            vocab_size,
+            max_seq_len,
+            use_gradient_checkpointing,
+        )
     elif model_size == "large":
-        return GPTForCausalLM.large(vocab_size, max_seq_len)
+        return GPTForCausalLM.large(
+            vocab_size,
+            max_seq_len,
+            use_gradient_checkpointing,
+        )
     else:
         raise ValueError(f"Unknown model size: {model_size}")
 
@@ -103,7 +130,12 @@ def train(args: argparse.Namespace) -> None:
     print(f"Using device: {device}")
 
     tokenizer = TiktokenTokenizer()
-    model = create_model(args.model_size, tokenizer.vocab_size, args.max_seq_len)
+    model = create_model(
+        args.model_size,
+        tokenizer.vocab_size,
+        args.max_seq_len,
+        args.use_gradient_checkpointing,
+    )
     model.apply(init_weights)
     model.to(device)
 

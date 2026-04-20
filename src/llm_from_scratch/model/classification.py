@@ -13,9 +13,16 @@ class GPTForClassification(GPT):
         max_seq_len: int,
         dropout: float,
         num_classes: int,
+        use_gradient_checkpointing: bool = False,
     ):
         super().__init__(
-            vocab_size, embed_dim, num_heads, num_layers, max_seq_len, dropout
+            vocab_size,
+            embed_dim,
+            num_heads,
+            num_layers,
+            max_seq_len,
+            dropout,
+            use_gradient_checkpointing,
         )
         self.cls_head = nn.Linear(embed_dim, num_classes, bias=False)
 

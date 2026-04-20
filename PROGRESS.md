@@ -624,3 +624,29 @@
 
 ### Open questions
 - Next: Gradient checkpointing
+
+---
+
+## Session 21 — 2026-04-19 — Gradient Checkpointing
+
+### What we covered
+- Implemented gradient checkpointing in `GPT.forward()` using `torch.utils.checkpoint.checkpoint()`
+- Added `use_gradient_checkpointing` flag to `GPT.__init__()` that toggles checkpointing per transformer block
+- Threaded `use_gradient_checkpointing` through `load_pretrained_lm` and `load_pretrained_cls`
+- Measured memory reduction: 73GB → 33GB (~55% reduction) on GPT-2 Large
+
+### Key learnings
+- Gradient checkpointing stores activations only at checkpoint boundaries and recomputes them during backprop — trades ~30% more compute for massive memory savings
+- `torch.utils.checkpoint.checkpoint(block, out, attn_mask, use_reentrant=False)` wraps each TransformerBlock; `use_reentrant=False` is the recommended modern mode
+- Works on any device (CPU, MPS, CUDA) — no GPU-specific features required
+- With 36 layers in GPT-2 Large, checkpointing every block gives maximum memory savings; grouping blocks (every 2-3) is possible but rarely worth the complexity
+
+### Code written
+- `src/llm_from_scratch/model/base.py` — Added `use_gradient_checkpointing` flag, `checkpoint()` call in forward loop
+- `src/llm_from_scratch/model/pretrained.py` — Threaded `use_gradient_checkpointing` through `load_pretrained_lm` and `load_pretrained_cls`
+
+### PLAN.md items completed
+- [x] Gradient checkpointing
+
+### Open questions
+- Next: LoRA / QLoRA deep dive

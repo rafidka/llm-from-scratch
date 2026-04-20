@@ -44,6 +44,12 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Enable mixed precision training (requires CUDA)",
     )
+    parser.add_argument(
+        "--use_gradient_checkpointing",
+        action="store_true",
+        default=False,
+        help="Enable mixed precision training (requires CUDA)",
+    )
     return parser.parse_args()
 
 
@@ -72,7 +78,11 @@ def train(args: argparse.Namespace) -> None:
     else:
         raise RuntimeError("Need to specify either batch_size or max_tokens_per_batch")
 
-    model = load_pretrained_lm(args.base_model, max_seq_len=args.max_seq_len)
+    model = load_pretrained_lm(
+        args.base_model,
+        max_seq_len=args.max_seq_len,
+        use_gradient_checkpointing=args.use_gradient_checkpointing,
+    )
     model.to(device)
 
     num_params = sum(p.numel() for p in model.parameters())

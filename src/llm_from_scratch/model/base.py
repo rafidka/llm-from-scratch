@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING
 
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 from llm_from_scratch.attention.scaled_dot_product import MultiHeadAttention
 from llm_from_scratch.model.embeddings import GPTEmbeddings
@@ -52,6 +53,7 @@ class GPT(nn.Module):
         num_layers: int,
         max_seq_len: int,
         dropout: float,
+        use_gradient_checkpointing: bool = False,
     ):
         super().__init__()
 
@@ -62,6 +64,7 @@ class GPT(nn.Module):
         self.num_layers = num_layers
         self.max_seq_len = max_seq_len
         self.dropout = dropout
+        self.use_gradient_checkpointing = use_gradient_checkpointing
 
         self.embeddings = GPTEmbeddings(vocab_size, embed_dim, max_seq_len)
         self.transformer_blocks = nn.ModuleList(
@@ -70,7 +73,12 @@ class GPT(nn.Module):
         self.ln = nn.LayerNorm(embed_dim)
 
     @classmethod
-    def tiny(cls, vocab_size: int, max_seq_len: int):
+    def tiny(
+        cls,
+        vocab_size: int,
+        max_seq_len: int,
+        use_gradient_checkpointing: bool = False,
+    ):
         """Create a very small GPT model for testing purposes.
 
         Note: dropout is set to 0.0 to ensure deterministic behavior in tests.
@@ -83,10 +91,16 @@ class GPT(nn.Module):
             num_layers=2,
             max_seq_len=max_seq_len,
             dropout=0.0,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
 
     @classmethod
-    def small(cls, vocab_size: int, max_seq_len: int = 1024):
+    def small(
+        cls,
+        vocab_size: int,
+        max_seq_len: int = 1024,
+        use_gradient_checkpointing: bool = False,
+    ):
         """GPT-2 Small: 124M parameters"""
         return cls(
             vocab_size,
@@ -95,10 +109,16 @@ class GPT(nn.Module):
             num_layers=12,
             max_seq_len=max_seq_len,
             dropout=0.1,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
 
     @classmethod
-    def medium(cls, vocab_size: int, max_seq_len: int = 1024):
+    def medium(
+        cls,
+        vocab_size: int,
+        max_seq_len: int = 1024,
+        use_gradient_checkpointing: bool = False,
+    ):
         """GPT-2 Medium: 355M parameters"""
         return cls(
             vocab_size,
@@ -107,10 +127,16 @@ class GPT(nn.Module):
             num_layers=24,
             max_seq_len=max_seq_len,
             dropout=0.1,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
 
     @classmethod
-    def large(cls, vocab_size: int, max_seq_len: int = 1024):
+    def large(
+        cls,
+        vocab_size: int,
+        max_seq_len: int = 1024,
+        use_gradient_checkpointing: bool = False,
+    ):
         """GPT-2 Large: 774M parameters"""
         return cls(
             vocab_size,
@@ -119,6 +145,7 @@ class GPT(nn.Module):
             num_layers=36,
             max_seq_len=max_seq_len,
             dropout=0.1,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
 
     def forward(
@@ -129,6 +156,9 @@ class GPT(nn.Module):
             raise RuntimeError("Expecting token_ids to be of shape (batch, seq_len).")
         out = self.embeddings(token_ids)
         for block in self.transformer_blocks:
-            out = block(out, attn_mask)
+            if self.use_gradient_checkpointing:
+                out = checkpoint(block, out, attn_mask, use_reentrant=False)
+            else:
+                out = block(out, attn_mask)
         out = self.ln(out)
         return out  # [batch, seq_len, embed_dim]

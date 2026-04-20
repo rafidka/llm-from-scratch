@@ -28,6 +28,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--num_classes", type=int, default=2)
     parser.add_argument("--eval_every_step", type=int, default=500)
+    parser.add_argument(
+        "--use_gradient_checkpointing",
+        action="store_true",
+        default=False,
+        help="Enable mixed precision training (requires CUDA)",
+    )
     return parser.parse_args()
 
 
@@ -48,6 +54,7 @@ def train(args: argparse.Namespace) -> None:
         args.base_model,
         num_classes=args.num_classes,
         max_seq_len=args.max_seq_len,
+        use_gradient_checkpointing=args.use_gradient_checkpointing,
     )
     model.to(device)
 

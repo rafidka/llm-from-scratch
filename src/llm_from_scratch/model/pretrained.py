@@ -44,20 +44,28 @@ class _FakeLinear:
 def load_pretrained_lm(
     model_name: str,
     max_seq_len: int = 1024,
+    use_gradient_checkpointing: bool = False,
 ) -> GPTForCausalLM:
-    return _load_pretrained(GPTForCausalLM, model_name, max_seq_len)
+    return _load_pretrained(
+        GPTForCausalLM,
+        model_name,
+        max_seq_len,
+        use_gradient_checkpointing,
+    )
 
 
 def load_pretrained_cls(
     model_name: str,
     num_classes: int,
     max_seq_len: int = 1024,
+    use_gradient_checkpointing: bool = False,
 ) -> GPTForClassification:
     return _load_pretrained(
         GPTForClassification,
         model_name,
         max_seq_len,
         num_classes=num_classes,
+        use_gradient_checkpointing=use_gradient_checkpointing,
     )
 
 
@@ -65,6 +73,7 @@ def _load_pretrained(
     cls,
     model_name: str,
     max_seq_len: int = 1024,
+    use_gradient_checkpointing: bool = False,
     **kwargs,
 ):
     """
@@ -96,6 +105,7 @@ def _load_pretrained(
         num_layers=config.n_layer,
         max_seq_len=max_seq_len,
         dropout=0.0,
+        use_gradient_checkpointing=use_gradient_checkpointing,
         **kwargs,
     )
 
