@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from torch import nn
 from torch.utils.checkpoint import checkpoint
@@ -35,6 +35,14 @@ class TransformerBlock(nn.Module):
         self.ff = FeedForward(embed_dim, 4 * embed_dim, dropout)
         self.ln2 = nn.LayerNorm(embed_dim)
         self.dropout = nn.Dropout(dropout)
+
+    def lorafy(self, rank: int, alpha: float, sigma: float = 0.02):
+        self.attn.lorafy(rank, alpha, sigma)
+        self.ln1.requires_grad_(False)
+        self.ff.requires_grad_(False)
+        self.ln2.requires_grad_(False)
+        # Not enabled for now; focus is on LoRA in attention layer.
+        # self.ff.lorafy(rank, alpha, sigma)
 
     def forward(self, x: "Tensor", attn_mask: "Tensor | None" = None) -> "Tensor":
         # x: [batch, seq_len, embed_dim]
@@ -147,6 +155,12 @@ class GPT(nn.Module):
             dropout=0.1,
             use_gradient_checkpointing=use_gradient_checkpointing,
         )
+
+    def lorafy(self, rank: int, alpha: float, sigma: float = 0.02):
+        self.embeddings.requires_grad_(False)
+        for block in self.transformer_blocks:
+            cast(TransformerBlock, block).lorafy(rank, alpha, sigma)
+        self.ln.requires_grad_(False)
 
     def forward(
         self, token_ids: "Tensor", attn_mask: "Tensor | None" = None

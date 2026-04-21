@@ -650,3 +650,34 @@
 
 ### Open questions
 - Next: LoRA / QLoRA deep dive
+
+---
+
+## Session 22 — 2026-04-20 — LoRA Implementation
+
+### What we covered
+- Implemented `LoRALayer(nn.Module)` that wraps `nn.Linear` with low-rank adaptation matrices A and B
+- Added `lorafy()` method to `MultiHeadAttention`, `TransformerBlock`, and `GPT` to apply LoRA to Q, K, V, O projections and freeze all other parameters
+- Added `--lora` CLI flag to instruction fine-tuning script
+- Verified 5.8M trainable params out of 779.9M total (0.74%) with rank=16 across all attention projections
+- Discussed LoRA design choices: what to apply LoRA to, why all non-LoRA params are frozen, why LoRA saves memory but not speed
+
+### Key learnings
+- LoRA decomposes weight updates as W' = W + BA where B is zeros and A is small Gaussian noise at init, ensuring the model starts as the pretrained model
+- LoRA's main benefit is memory savings (optimizer states + gradients), not training speed — forward/backward passes still go through all layers
+- For GPT-2 Large: full fine-tuning needs ~9GB optimizer states; LoRA needs ~92MB (5.8M params × 2 for Adam)
+- All non-LoRA parameters must be frozen — leaving other layers trainable defeats the purpose since their optimizer states consume the bulk of memory
+- Scaling factor α/r decouples learning rate from rank, allowing rank changes without retuning hyperparameters
+
+### Code written
+- `src/llm_from_scratch/model/lora.py` — `LoRALayer` class with separated forward (base + lora)
+- `src/llm_from_scratch/attention/scaled_dot_product.py` — `lorafy()` method on `MultiHeadAttention`, conditional LoRA in forward
+- `src/llm_from_scratch/model/base.py` — `lorafy()` on `TransformerBlock` and `GPT`, freeze all non-LoRA params
+- `src/llm_from_scratch/training/causallm.py` — Cleaned up `_test_model`, removed commented-out code
+- `scripts/finetuning/instruction.py` — Added `--lora` flag, trainable param count logging
+
+### PLAN.md items completed
+- [x] LoRA implementation
+
+### Open questions
+- Next: QLoRA or evaluate fine-tuned models

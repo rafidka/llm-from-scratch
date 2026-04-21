@@ -70,7 +70,7 @@ class GPTForCausalLMTrainer(GPTTrainer[GPTForCausalLM]):
         self._on_train_step_end(epoch, step)
         return self.last_loss
 
-    def _on_log_step(self, step_abs: int) -> None:
+def _on_log_step(self, step_abs: int) -> None:
         print(f"Step {step_abs}: lr={self.lr:.2e}, Loss: {self.last_loss:.4f}")
         self._test_model()
 
@@ -79,28 +79,21 @@ class GPTForCausalLMTrainer(GPTTrainer[GPTForCausalLM]):
         if not self.test_prompts:
             return
         self.model.eval()
-
-        input_ids = pad_sequence(
-            [
-                torch.tensor(self.tokenizer.encode(prompt), device=self.device)
-                for prompt in self.test_prompts
-            ],
-            batch_first=True,
-            padding_value=0,
-        )
-
-        with self.mp_context:
-            output_ids = self.model.generate(
-                input_ids,
-                max_new_tokens=self.generation_tokens,
-                temperature=0.2,
-                top_k=40,
-                eos_token_id=self.tokenizer.encode("<|endoftext|>")[0],
+        for prompt in self.test_prompts:
+            input_ids = (
+                torch.tensor(self.tokenizer.encode(prompt)).view(1, -1).to(self.device)
             )
-        for output in output_ids:
+            with self.mp_context:
+                output_ids = self.model.generate(
+                    input_ids,
+                    max_new_tokens=self.generation_tokens,
+                    temperature=0.2,
+                    top_k=40,
+                    eos_token_id=self.tokenizer.encode("\n")[0],
+                )
             print("----------")
             print()
-            print(self.tokenizer.decode(output.tolist()))
-            print()
-            print("----------")
-            self.model.train()
+            print(self.tokenizer.decode(output_ids[0].tolist()))
+        print()
+        print("----------")
+        self.model.train()

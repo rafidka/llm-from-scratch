@@ -50,6 +50,12 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Enable mixed precision training (requires CUDA)",
     )
+    parser.add_argument(
+        "--lora",
+        action="store_true",
+        default=False,
+        help="If enabled, train LoRA adapters.",
+    )
     return parser.parse_args()
 
 
@@ -83,10 +89,17 @@ def train(args: argparse.Namespace) -> None:
         max_seq_len=args.max_seq_len,
         use_gradient_checkpointing=args.use_gradient_checkpointing,
     )
+    if args.lora:
+        model.lorafy(16, alpha=32, sigma=0.02)
     model.to(device)
 
-    num_params = sum(p.numel() for p in model.parameters())
-    print(f"Model: {args.base_model}, Parameters: {num_params:,}")
+    params_total = sum(p.numel() for p in model.parameters())
+    params_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(
+        f"Model: {args.base_model}, "
+        f"Total Parameters: {params_total:,}, "
+        f"Trainable Parameters: {params_trainable:,}"
+    )
 
     optim = AdamW(model.parameters(), weight_decay=args.weight_decay)
     loss_fn = CrossEntropyLoss(ignore_index=_IGNORE_INDEX)
@@ -104,7 +117,7 @@ def train(args: argparse.Namespace) -> None:
         grad_accml_steps=args.grad_accml_steps,
         use_mixed_precision=args.use_mixed_precision,
         checkpoint_dir="./checkpoints",
-        checkpoint_every=1500,
+        checkpoint_every=1000,
     )
     trainer.train()
 

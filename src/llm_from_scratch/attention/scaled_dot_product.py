@@ -5,6 +5,8 @@ from math import sqrt
 import torch
 from torch import Tensor, nn
 
+from llm_from_scratch.model.lora import LoRALayer
+
 
 def scaled_dot_product_attention(
     q: Tensor,
@@ -124,6 +126,19 @@ class MultiHeadAttention(nn.Module):
         # Output projection
         self.W_o = nn.Linear(embed_dim, embed_dim)
 
+        # LoRA stuff.
+        # For now, just q and v. Can consider k and o if needed.
+        self.W_q_lora: LoRALayer | None = None
+        self.W_k_lora: LoRALayer | None = None
+        self.W_v_lora: LoRALayer | None = None
+        self.W_o_lora: LoRALayer | None = None
+
+    def lorafy(self, rank: int, alpha: float, sigma: float = 0.02):
+        self.W_q_lora = LoRALayer(self.W_q, rank, alpha, sigma)
+        self.W_k_lora = LoRALayer(self.W_k, rank, alpha, sigma)
+        self.W_v_lora = LoRALayer(self.W_v, rank, alpha, sigma)
+        self.W_o_lora = LoRALayer(self.W_o, rank, alpha, sigma)
+
     def forward(self, x: "Tensor", attn_mask: "Tensor | None" = None) -> "Tensor":
         """
         Forward pass for the multi head attention.
@@ -138,15 +153,15 @@ class MultiHeadAttention(nn.Module):
         # x: [batch, seq_len, embed_dim]
         batch, seq_len, embed_dim = x.shape
 
-        q = self.W_q(x)
+        q = self.W_q_lora(x) if self.W_q_lora else self.W_q(x)
         q = q.view(batch, seq_len, self.num_heads, self.head_dim)
         q = q.transpose(1, 2)  # transpose into [batch, num_heads, seq_len, head_dim]
 
-        k = self.W_k(x)
+        k = self.W_k_lora(x) if self.W_k_lora else self.W_k(x)
         k = k.view(batch, seq_len, self.num_heads, self.head_dim)
         k = k.transpose(1, 2)  # transpose into [batch, num_heads, seq_len, head_dim]
 
-        v = self.W_v(x)
+        v = self.W_v_lora(x) if self.W_v_lora else self.W_v(x)
         v = v.view(batch, seq_len, self.num_heads, self.head_dim)
         v = v.transpose(1, 2)  # transpose into [batch, num_heads, seq_len, head_dim]
 
@@ -163,4 +178,4 @@ class MultiHeadAttention(nn.Module):
         attn = attn.transpose(1, 2).contiguous().view(batch, seq_len, embed_dim)  # type: ignore[union-attr]
 
         # Output shape: [batch, seq_len, embed_dim].
-        return self.W_o(attn)
+        return self.W_o_lora(attn) if self.W_o_lora else self.W_o(attn)

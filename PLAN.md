@@ -87,7 +87,7 @@ heavy training offloaded to cloud GPUs.
 - [x] Instruction fine-tuning (Alpaca-style)
 - [x] **Deep dive: Training efficiency** — gradient accumulation, mixed precision (bf16), length-grouped batching
 - [x] Gradient checkpointing
-- [ ] **Deep dive: LoRA / QLoRA** — implement parameter-efficient fine-tuning
+- [x] **Deep dive: LoRA** — implement parameter-efficient fine-tuning
 - [ ] Evaluate fine-tuned models
 
 ---
