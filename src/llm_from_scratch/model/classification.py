@@ -14,6 +14,7 @@ class GPTForClassification(GPT):
         dropout: float,
         num_classes: int,
         use_gradient_checkpointing: bool = False,
+        use_rms_norm: bool = False,
     ):
         super().__init__(
             vocab_size,
@@ -23,6 +24,7 @@ class GPTForClassification(GPT):
             max_seq_len,
             dropout,
             use_gradient_checkpointing,
+            use_rms_norm,
         )
         self.cls_head = nn.Linear(embed_dim, num_classes, bias=False)
 

@@ -53,6 +53,12 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Enable mixed precision training (requires CUDA)",
     )
+    parser.add_argument(
+        "--use_rms_norm",
+        action="store_true",
+        default=False,
+        help="Enable RMSNorm layers instead of LayerNorm",
+    )
     return parser.parse_args()
 
 
@@ -70,30 +76,35 @@ def create_model(
     vocab_size: int,
     max_seq_len: int,
     use_gradient_checkpointing: bool = False,
+    use_rms_norm: bool = False,
 ) -> GPTForCausalLM:
     if model_size == "tiny":
         return GPTForCausalLM.tiny(
             vocab_size,
             max_seq_len,
             use_gradient_checkpointing,
+            use_rms_norm,
         )
     elif model_size == "small":
         return GPTForCausalLM.small(
             vocab_size,
             max_seq_len,
             use_gradient_checkpointing,
+            use_rms_norm,
         )
     elif model_size == "medium":
         return GPTForCausalLM.medium(
             vocab_size,
             max_seq_len,
             use_gradient_checkpointing,
+            use_rms_norm,
         )
     elif model_size == "large":
         return GPTForCausalLM.large(
             vocab_size,
             max_seq_len,
             use_gradient_checkpointing,
+            use_rms_norm,
         )
     else:
         raise ValueError(f"Unknown model size: {model_size}")
@@ -135,6 +146,7 @@ def train(args: argparse.Namespace) -> None:
         tokenizer.vocab_size,
         args.max_seq_len,
         args.use_gradient_checkpointing,
+        args.use_rms_norm,
     )
     model.apply(init_weights)
     model.to(device)

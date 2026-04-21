@@ -679,3 +679,34 @@
 
 ### Open questions
 - Next: Evaluate fine-tuned models
+
+---
+
+## Session 23 — 2026-04-21 — RMSNorm
+
+### What we covered
+- Implemented `LayerNorm` and `RMSNorm` from scratch in `norm.py`, with float32 upcast for mixed precision stability
+- Added `use_rms_norm` flag to `GPT`, `TransformerBlock`, `GPTForCausalLM`, `GPTForClassification`
+- Swapped all `nn.LayerNorm` for `RMSNorm` when flag is enabled (ln1, ln2 in each block + final ln)
+- Benchmarked RMSNorm vs LayerNorm during pretraining: ~1.5% speed difference (negligible, as expected — compute is dominated by matmuls)
+
+### Key learnings
+- RMSNorm removes mean subtraction and bias: `x / sqrt(mean(x²) + ε) * γ` — only re-scaling matters, not re-centering
+- Mixed precision stability: must upcast to float32 before computing mean/variance/rms, then cast back to original dtype before the affine transform
+- Conv1D transpose (HuggingFace stores weights as [in, out], we use [out, in])
+- Speed difference is negligible because normalization layers are a tiny fraction of total compute in large models
+- The real motivation for RMSNorm: simpler, fewer parameters, and used by all modern LLMs (LLaMA, Mistral, Gemma)
+
+### Code written
+- `src/llm_from_scratch/model/norm.py` — `LayerNorm` and `RMSNorm` implementations with float32 upcasting
+- `src/llm_from_scratch/model/base.py` — Added `use_rms_norm` flag, conditional `RMSNorm` vs `nn.LayerNorm`
+- `src/llm_from_scratch/model/causallm.py` — Threaded `use_rms_norm` through `GPTForCausalLM`
+- `src/llm_from_scratch/model/classification.py` — Threaded `use_rms_norm` through `GPTForClassification`
+- `scripts/pretraining/train.py` — Added `--use_rms_norm` CLI flag
+- `examples/model/norm.py` — Example/test script for normalization layers
+
+### PLAN.md items completed
+- [x] **RMSNorm** — Replace LayerNorm with RMSNorm, understand why
+
+### Open questions
+- Next: RoPE (Rotary Positional Embeddings)

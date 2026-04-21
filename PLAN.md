@@ -98,7 +98,7 @@ heavy training offloaded to cloud GPUs.
 
 Evolving our GPT-2 toward a modern LLM (LLaMA-style):
 
-- [ ] **RMSNorm** — Replace LayerNorm with RMSNorm, understand why
+- [x] **RMSNorm** — Replace LayerNorm with RMSNorm, understand why
 - [ ] **RoPE** — Replace absolute positional embeddings with Rotary Positional Embeddings
 - [ ] **SwiGLU** — Replace GELU FFN with SwiGLU activation
 - [ ] **Grouped Query Attention (GQA)** — Implement KV head sharing

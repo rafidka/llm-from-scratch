@@ -105,6 +105,21 @@
                 "--max_tokens_per_batch",
                 "4096",
             ]
+        },
+        {
+            "name": "norm",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/model/norm.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--grad_accml_steps",
+                "10",
+                "--use_mixed_precision",
+                "--max_tokens_per_batch",
+                "4096",
+            ]
         }
     ]
 }

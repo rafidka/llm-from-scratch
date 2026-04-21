@@ -19,6 +19,7 @@ class GPTForCausalLM(GPT):
         max_seq_len: int,
         dropout: float,
         use_gradient_checkpointing: bool = False,
+        use_rms_norm: bool = False,
     ):
         super().__init__(
             vocab_size,
@@ -28,6 +29,7 @@ class GPTForCausalLM(GPT):
             max_seq_len,
             dropout,
             use_gradient_checkpointing,
+            use_rms_norm,
         )
 
         self.lm_head = nn.Linear(embed_dim, vocab_size, bias=False)
