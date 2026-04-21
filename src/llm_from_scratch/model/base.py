@@ -5,6 +5,7 @@ from torch.utils.checkpoint import checkpoint
 
 from llm_from_scratch.attention.scaled_dot_product import MultiHeadAttention
 from llm_from_scratch.model.embeddings import GPTEmbeddings
+from llm_from_scratch.model.lora import LoRALayer
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -18,11 +19,22 @@ class FeedForward(nn.Module):
         self.ff2 = nn.Linear(ffn_dim, embed_dim)
         self.dropout = nn.Dropout(dropout)
 
+        # LoRA stuff.
+        self.lora_ff1: LoRALayer | None = None
+        self.lora_ff2: LoRALayer | None = None
+
+    def lorafy(self, rank: int, alpha: float, sigma: float = 0.02):
+        if self.lora_ff1:
+            raise RuntimeError("Already LoRAfied")
+
+        self.lora_ff1 = LoRALayer(self.ff1, rank, alpha, sigma)
+        self.lora_ff2 = LoRALayer(self.ff2, rank, alpha, sigma)
+
     def forward(self, x: "Tensor") -> "Tensor":
         out = x
-        out = self.ff1(out)
+        out = self.lora_ff1(out) if self.lora_ff1 else self.ff1(out)
         out = self.gelu(out)
-        out = self.ff2(out)
+        out = self.lora_ff2(out) if self.lora_ff2 else self.ff2(out)
         out = self.dropout(out)
         return out
 
@@ -39,10 +51,8 @@ class TransformerBlock(nn.Module):
     def lorafy(self, rank: int, alpha: float, sigma: float = 0.02):
         self.attn.lorafy(rank, alpha, sigma)
         self.ln1.requires_grad_(False)
-        self.ff.requires_grad_(False)
+        self.ff.lorafy(rank, alpha, sigma)
         self.ln2.requires_grad_(False)
-        # Not enabled for now; focus is on LoRA in attention layer.
-        # self.ff.lorafy(rank, alpha, sigma)
 
     def forward(self, x: "Tensor", attn_mask: "Tensor | None" = None) -> "Tensor":
         # x: [batch, seq_len, embed_dim]

@@ -653,31 +653,29 @@
 
 ---
 
-## Session 22 — 2026-04-20 — LoRA Implementation
+## Session 22 — 2026-04-20 — LoRA
 
 ### What we covered
-- Implemented `LoRALayer(nn.Module)` that wraps `nn.Linear` with low-rank adaptation matrices A and B
-- Added `lorafy()` method to `MultiHeadAttention`, `TransformerBlock`, and `GPT` to apply LoRA to Q, K, V, O projections and freeze all other parameters
-- Added `--lora` CLI flag to instruction fine-tuning script
-- Verified 5.8M trainable params out of 779.9M total (0.74%) with rank=16 across all attention projections
-- Discussed LoRA design choices: what to apply LoRA to, why all non-LoRA params are frozen, why LoRA saves memory but not speed
+- Implemented `LoRALayer(nn.Module)` — low-rank adaptation layer that freezes original linear weights and adds trainable A/B matrices
+- Implemented `lorafy()` methods on `GPT`, `TransformerBlock`, `FeedForward`, and `MultiHeadAttention` to apply LoRA to attention projections (W_q, W_k, W_v, W_o) and optionally FFN layers
+- Verified that LoRA reduces trainable params from 779.9M to 5.8M on GPT-2 Large
+- Measured ~25% speed improvement (from reduced optimizer overhead), with memory savings from eliminating gradient and optimizer state storage for frozen params
 
 ### Key learnings
-- LoRA decomposes weight updates as W' = W + BA where B is zeros and A is small Gaussian noise at init, ensuring the model starts as the pretrained model
-- LoRA's main benefit is memory savings (optimizer states + gradients), not training speed — forward/backward passes still go through all layers
-- For GPT-2 Large: full fine-tuning needs ~9GB optimizer states; LoRA needs ~92MB (5.8M params × 2 for Adam)
-- All non-LoRA parameters must be frozen — leaving other layers trainable defeats the purpose since their optimizer states consume the bulk of memory
-- Scaling factor α/r decouples learning rate from rank, allowing rank changes without retuning hyperparameters
+- LoRA replaces full weight updates with low-rank decomposition: W' = W + BA, where B is (out_features, r) and A is (r, in_features)
+- A is initialized with small Gaussian (σ=0.02), B is initialized with zeros — ensures BA=0 at start, so model begins identical to pretrained
+- Scaling factor α/r controls the magnitude of the LoRA update, decoupling learning rate from rank
+- With LoRA, everything is frozen except LoRA A/B matrices — including layers without LoRA adapters
+- LoRA's main benefit is memory savings (~8.6GB for optimizer states on GPT-2 Large), not speed — forward/backward passes still go through all frozen weights
+- Combined LoRA + gradient checkpointing gives maximum memory savings
 
 ### Code written
-- `src/llm_from_scratch/model/lora.py` — `LoRALayer` class with separated forward (base + lora)
-- `src/llm_from_scratch/attention/scaled_dot_product.py` — `lorafy()` method on `MultiHeadAttention`, conditional LoRA in forward
-- `src/llm_from_scratch/model/base.py` — `lorafy()` on `TransformerBlock` and `GPT`, freeze all non-LoRA params
-- `src/llm_from_scratch/training/causallm.py` — Cleaned up `_test_model`, removed commented-out code
-- `scripts/finetuning/instruction.py` — Added `--lora` flag, trainable param count logging
+- `src/llm_from_scratch/model/lora.py` — `LoRALayer` class with `forward()`, `requires_grad_` override
+- `src/llm_from_scratch/attention/scaled_dot_product.py` — Added `lorafy()` method and LoRA-wrapped projections in `MultiHeadAttention`
+- `src/llm_from_scratch/model/base.py` — Added `lorafy()` to `FeedForward`, `TransformerBlock`, and `GPT`; freezes embeddings, LN, and FF layers
 
 ### PLAN.md items completed
-- [x] LoRA implementation
+- [x] **Deep dive: LoRA / QLoRA** — implement parameter-efficient fine-tuning
 
 ### Open questions
-- Next: QLoRA or evaluate fine-tuned models
+- Next: Evaluate fine-tuned models

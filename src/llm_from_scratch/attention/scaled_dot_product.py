@@ -127,7 +127,6 @@ class MultiHeadAttention(nn.Module):
         self.W_o = nn.Linear(embed_dim, embed_dim)
 
         # LoRA stuff.
-        # For now, just q and v. Can consider k and o if needed.
         self.W_q_lora: LoRALayer | None = None
         self.W_k_lora: LoRALayer | None = None
         self.W_v_lora: LoRALayer | None = None
