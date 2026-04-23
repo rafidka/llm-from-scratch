@@ -1,0 +1,123 @@
+\chapter{Tokenization}
+
+\section{The Tokenization Spectrum}
+
+Language models operate on sequences of integers, not raw text.
+\emph{Tokenization} is the bridge: it converts text into a sequence of
+token IDs that the model can process.
+
+\begin{keyconcept}
+  There is a fundamental tradeoff in tokenizer design:
+  \begin{itemize}
+    \item \textbf{Character-level}: tiny vocabulary ($\sim$256), very long
+          sequences, no semantic grouping.
+    \item \textbf{Word-level}: large vocabulary (potentially unbounded),
+          short sequences, but suffers from the OOV problem and vocabulary
+          explosion.
+    \item \textbf{Subword (BPE)}: strikes a balance---common words are
+          single tokens, rare words decompose into subwords. Most modern
+          LLMs use this.
+  \end{itemize}
+\end{keyconcept}
+
+\section{SimpleTokenizer}
+
+The simplest approach: split by whitespace, build a vocabulary from the
+corpus, and map tokens to IDs.
+
+\begin{pseudocode}[SimpleTokenizer: encode pseudocode]
+\textbf{Input:} text string \quad \textbf{Output:} list of integer IDs\\[3pt]
+tokens $\leftarrow$ \texttt{split(text)} by whitespace\\
+\textbf{for} each token in tokens:\\
+\quad \textbf{if} token \textbf{in} vocab:\\
+\quad\quad append \texttt{vocab[token]} to output\\
+\quad \textbf{else}:\\
+\quad\quad append \texttt{UNK\_ID} to output\\
+\textbf{return} output
+\end{pseudocode}
+
+\begin{keyconcept}
+  Special tokens serve important roles:
+  \texttt{<|unk|>} handles out-of-vocabulary words;
+  \texttt{<|eos|>} marks document boundaries so the model learns where
+  sequences end.
+\end{keyconcept}
+
+\section{Byte-Pair Encoding (BPE)}
+
+BPE iteratively merges the most frequent adjacent pair of symbols,
+building up from characters to longer subwords.
+
+\begin{pseudocode}[BPE Training]
+\textbf{Input:} corpus, number of merges $N$\\[3pt]
+Pre-tokenize corpus into words\\
+Initialize each word as a tuple of its characters\\
+\textbf{for} $i = 1$ \textbf{to} $N$:\\
+\quad Count all adjacent pairs across all words (weighted by word frequency)\\
+\quad pair $\leftarrow$ most frequent pair\\
+\quad Record pair in merge list\\
+\quad Merge every occurrence of pair in all words\\
+\textbf{Vocabulary} $\leftarrow$ initial characters $\cup$ all merged tokens $\cup$ special tokens
+\end{pseudocode}
+
+\begin{pseudocode}[BPE Encoding]
+\textbf{Input:} text string \quad \textbf{Output:} list of integer IDs\\[3pt]
+Pre-tokenize text into words\\
+\textbf{for} each word:\\
+\quad Split word into characters\\
+\quad \textbf{for} each merge rule \textbf{in order}:\\
+\quad\quad Apply merge to the character tuple\\
+\quad Append resulting subwords to output\\
+Map subwords to IDs (unknown $\rightarrow$ UNK)\\
+\textbf{return} IDs
+\end{pseudocode}
+
+\begin{keyconcept}
+  \textbf{BPE key insight}: merge rules are ordered---encoding must
+  replay them in the \emph{same order} as training. The tokenizer
+  learns which merges are most useful from the data.
+
+  GPT-2's tokenizer uses byte-level BPE with the regex
+  \texttt{r"(\textquestiondown ?[a-zA-Z]+| ?[0-9]+| ?[\textasciicircum\textbackslash s\textbackslash a-zA-Z0-9]+|\textbackslash s+)"}
+  to split text before applying BPE merges. Its vocabulary contains
+  50,257 tokens learned from billions of tokens of text.
+\end{keyconcept}
+
+\section{Next-Token Prediction Dataset}
+
+Language models are trained via \emph{next-token prediction}: given a
+sequence of tokens, predict the next one.
+
+\begin{pseudocode}[Sliding-Window Dataset]
+\textbf{Input:} tokenized corpus, max\_length, stride\\[3pt]
+\textbf{for} $i = 0$, stride, $2\times$stride, \ldots:\\
+\quad input  $\leftarrow$ tokens[$i$ : $i + \text{max\_length}$]\\
+\quad target $\leftarrow$ tokens[$i+1$ : $i + 1 + \text{max\_length}$]\\
+\quad yield (input, target)
+\end{pseudocode}
+
+\begin{keyconcept}
+  The target is the input shifted by one position: if the input is
+  ``The cat sat'', the target is ``cat sat on''. The \textbf{stride}
+  controls overlap between windows. Smaller stride $=$ more training
+  examples but more redundancy. When
+  $\text{stride} = \text{max\_length}$, there is no overlap.
+\end{keyconcept}
+
+\section*{Review Questions}
+
+\begin{reviewquestion}[1]
+  Why does word-level tokenization suffer from vocabulary explosion, and
+  how does BPE address this?
+\end{reviewquestion}
+
+\begin{reviewquestion}[2]
+  In BPE encoding, why must merge rules be replayed in the same order as
+  during training? What would happen if you applied them in a different
+  order?
+\end{reviewquestion}
+
+\begin{reviewquestion}[3]
+  How does the stride parameter in the sliding-window dataset affect both
+  the number of training examples and their redundancy?
+\end{reviewquestion}

@@ -1,0 +1,178 @@
+\chapter{The GPT Architecture}
+
+\section{Token and Positional Embeddings}
+
+Given a sequence of token IDs $[t_1, t_2, \ldots, t_n]$:
+
+\[
+  x_i = \text{Embed}_{\text{token}}(t_i) + \text{Embed}_{\text{pos}}(i)
+\]
+
+\begin{keyconcept}
+  Token embeddings convert discrete IDs to continuous vectors.
+  Positional embeddings give the model information about \emph{where}
+  each token appears---without them, the model is permutation-invariant
+  (bag-of-words).
+
+  In GPT-2, both are learned \texttt{nn.Embedding} layers.
+  The vocabulary size is 50,257 and the maximum context length is 1,024.
+\end{keyconcept}
+
+\section{LayerNorm and Residual Connections}
+
+Each TransformerBlock uses \textbf{pre-norm} architecture:
+
+\[
+  \text{out} = x + \text{Dropout}\!\left(\text{Sublayer}\!\left(\text{LayerNorm}(x)\right)\right)
+\]
+
+\begin{keyconcept}
+  \textbf{Why residual connections?} They provide a ``clean path'' for
+  gradients to flow through deep networks:
+  \[
+    \frac{\partial}{\partial x}\bigl(x + f(x)\bigr) = 1 + \frac{\partial f}{\partial x}
+  \]
+  Even if $\frac{\partial f}{\partial x}$ is small, gradients can still
+  flow through the $+1$ term, preventing vanishing gradients.
+\end{keyconcept}
+
+\section{Pre-Norm vs Post-Norm}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+ & \textbf{Pre-Norm (GPT-2+)} & \textbf{Post-Norm (Original)} \\
+\midrule
+Formula & $x + f(\text{LN}(x))$ & $\text{LN}(x + f(x))$ \\
+LN position & Before sublayer & After sublayer \\
+Gradient flow & LN \emph{not} in residual path & LN \emph{in} residual path \\
+Training stability & Stable without warmup & Requires warmup \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{keyconcept}
+  In 12-layer networks, pre-norm produces gradients $\sim5\times$ larger
+  at embedding layers compared to post-norm. This is because in
+  post-norm, LayerNorm sits inside the residual path, and its gradients
+  can shrink the signal flowing backward. Pre-norm keeps LayerNorm
+  ``outside'' the residual path, preserving gradient magnitude.
+\end{keyconcept}
+
+\section{Feed-Forward Network}
+
+The FFN in each block has two linear layers with a GELU activation:
+
+\[
+  \text{FFN}(x) = W_2\!\left(\text{GELU}(W_1 x + b_1)\right) + b_2
+\]
+
+where GELU is defined as:
+
+\[
+  \text{GELU}(x) = x \cdot \Phi(x) \approx 0.5\,x\left(1 + \tanh\!\left[\sqrt{\frac{2}{\pi}}\left(x + 0.044715x^3\right)\right]\right)
+\]
+
+\begin{keyconcept}
+  The FFN's hidden dimension is typically $4\times$ the embedding
+  dimension (e.g., 768 $\rightarrow$ 3072 for GPT-2 Small). This
+  expansion allows the model to learn richer representations in a
+  higher-dimensional space before projecting back down.
+\end{keyconcept}
+
+\section{Transformer Block Assembly}
+
+A single TransformerBlock:
+
+\begin{tikzpicture}[
+  node distance=0.6cm,
+  block/.style={rectangle, draw, rounded corners, minimum width=4.5cm,
+                minimum height=0.7cm, font=\small},
+  arrow/.style={-{Stealth[length=2.5mm]}, thick}
+]
+  \node[block, fill=accent!15] (input) {Input: $x$};
+  \node[block, fill=accent!25, below=of input] (ln1) {LayerNorm};
+  \node[block, fill=highlight!20, below=of ln1] (attn) {Multi-Head Attention};
+  \node[block, fill=accent!10, below=of attn] (drop1) {Dropout + Residual};
+  \node[block, fill=accent!25, below=of drop1] (ln2) {LayerNorm};
+  \node[block, fill=highlight!20, below=of ln2] (ffn) {Feed-Forward (GELU)};
+  \node[block, fill=accent!10, below=of ffn] (drop2) {Dropout + Residual};
+  \node[block, fill=accent!15, below=of drop2] (output) {Output};
+
+  \draw[arrow] (input) -- (ln1);
+  \draw[arrow] (ln1) -- (attn);
+  \draw[arrow] (attn) -- (drop1);
+  \draw[arrow] (drop1) -- (ln2);
+  \draw[arrow] (ln2) -- (ffn);
+  \draw[arrow] (ffn) -- (drop2);
+  \draw[arrow] (drop2) -- (output);
+\end{tikzpicture}
+
+Or more precisely:
+\begin{align*}
+  x' &= x + \text{Dropout}\!\left(\text{MHA}\!\left(\text{LN}_1(x)\right)\right) \\
+  x'' &= x' + \text{Dropout}\!\left(\text{FFN}\!\left(\text{LN}_2(x')\right)\right)
+\end{align*}
+
+\section{Full GPT-2 Architecture}
+
+Stack $N$ transformer blocks on top of embeddings, add a final
+LayerNorm, and project to vocabulary-sized logits:
+
+\begin{pseudocode}[GPT-2 Forward Pass]
+$x \leftarrow \text{Embed}_{\text{token}}(\text{ids}) + \text{Embed}_{\text{pos}}(\text{positions})$\\[3pt]
+\textbf{for} block $1$ \textbf{to} $N$:\\
+\quad $x \leftarrow \text{TransformerBlock}(x)$ \hfill\textrm{\small (includes residual connections)}\\[3pt]
+$x \leftarrow \text{LayerNorm}(x)$\\
+$\text{logits} \leftarrow \text{Linear}(x)$ \hfill\textrm{\small (project to vocab size)}\\
+\textbf{return} logits
+\end{pseudocode}
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Model} & \textbf{Embed Dim} & \textbf{Layers} & \textbf{Heads} \\
+\midrule
+GPT-2 Small  & 768  & 12 & 12 \\
+GPT-2 Medium & 1024 & 24 & 16 \\
+GPT-2 Large  & 1280 & 36 & 20 \\
+GPT-2 XL     & 1600 & 48 & 25 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Text Generation Strategies}
+
+\begin{itemize}
+  \item \textbf{Greedy}: pick $\text{argmax}$ at each step. Deterministic
+        but prone to repetition.
+  \item \textbf{Temperature}: scale logits by $T$ before softmax.
+        $T<1$ makes the distribution sharper; $T>1$ makes it flatter.
+        \[
+          P(w_i) = \frac{\exp(\text{logit}_i / T)}{\sum_j \exp(\text{logit}_j / T)}
+        \]
+  \item \textbf{Top-$k$}: sample only from the $k$ highest-probability
+        tokens. Filters out unlikely tokens while maintaining randomness.
+  \item \textbf{Top-$p$} (nucleus sampling): sample from the smallest
+        set of tokens whose cumulative probability exceeds $p$.
+        More adaptive than top-$k$ since the pool size varies.
+\end{itemize}
+
+\section*{Review Questions}
+
+\begin{reviewquestion}[1]
+  Why does the GPT-2 architecture use pre-norm instead of post-norm?
+  What specific problem does pre-norm solve?
+\end{reviewquestion}
+
+\begin{reviewquestion}[2]
+  A TransformerBlock has two sublayers (attention and FFN), each wrapped
+  in a residual connection and LayerNorm. Write out the full computation
+  for both sublayers with pre-norm.
+\end{reviewquestion}
+
+\begin{reviewquestion}[3]
+  Explain the difference between top-$k$ and top-$p$ sampling. In what
+  situation would top-$p$ produce a different set of candidate tokens
+  than top-$k$?
+\end{reviewquestion}

@@ -1,0 +1,156 @@
+\chapter{Fine-Tuning}
+
+\section{Classification Head}
+
+For classification tasks (e.g., sentiment analysis), replace the LM
+head with a linear classification head:
+
+\[
+  \hat{y} = \text{softmax}\!\left(W_{\text{cls}} \cdot h_{\text{last}} + b_{\text{cls}}\right)
+\]
+
+where $h_{\text{last}}$ is the hidden state of the \textbf{last token}
+in the sequence.
+
+\begin{keyconcept}
+  Why the last token? In causal attention, the last token has attended
+  to all preceding tokens, making its hidden state a summary of the
+  entire sequence. This is analogous to the \texttt{[CLS]} token in
+  BERT, but we don't need a special token---the last position naturally
+  accumulates information.
+\end{keyconcept}
+
+\section{Instruction Fine-Tuning and Masked Loss}
+
+For instruction fine-tuning, we format data as:
+
+\begin{center}
+\texttt{<prompt>Instruction here\textbar\textbar<Response here<|eos|>}
+\end{center}
+
+We want to compute loss \emph{only} on the response tokens, not the
+prompt. This is achieved via \texttt{ignore\_index = -100} in
+\texttt{CrossEntropyLoss}:
+
+\[
+  \mathcal{L} = -\frac{1}{|\{i : t_i \neq -100\}|}\sum_{i:\, t_i \neq -100} \log P(t_i \mid \text{context})
+\]
+
+\begin{keyconcept}
+  Padding tokens also use \texttt{ignore\_index = -100} so they don't
+  contribute to loss. The \texttt{-100} value is PyTorch's convention
+  for ``ignore this position.''
+\end{keyconcept}
+
+\section{Attention Masks}
+
+When sequences in a batch have different lengths, shorter sequences
+are padded. Attention masks tell the model which positions are real
+tokens and which are padding:
+
+\begin{pseudocode}[Creating Attention Masks]
+attention\_mask $\leftarrow$ (input\_ids $\neq$ padding\_token\_id)\\[3pt]
+$\triangleright$ Shape: [batch, seq\_len], dtype: bool\\
+$\triangleright$ Before attention:\\
+scores $\leftarrow$ scores.masked\_fill($\neg$attention\_mask, $-\infty$)
+\end{pseudocode}
+
+\begin{keyconcept}
+  The attention mask is expanded from $[\text{batch}, \text{seq}]$ to
+  $[\text{batch}, 1, \text{seq}]$ before being applied to the
+  $[\text{batch}, \text{heads}, \text{seq}, \text{seq}]$ attention
+  scores. Broadcasting replicates it across all heads and query
+  positions.
+
+  During generation, the attention mask must \emph{grow} alongside
+  the token sequence---each new token gets a mask value of 1 (real).
+\end{keyconcept}
+
+\section{Length-Grouped Batching}
+
+When instruction fine-tuning with variable-length sequences:
+
+\begin{pseudocode}[Length-Grouped Batching]
+Sort examples by sequence length (with noise for randomization)\\
+Group similar-length examples into batches\\
+\textbf{for} each batch:\\
+\quad batch\_size $\leftarrow$ max\_tokens / max\_seq\_len\_in\_batch\\
+\quad Pad sequences to longest in batch (not global max)\\
+Shuffle batch order to prevent length-biased training
+\end{pseudocode}
+
+\begin{keyconcept}
+  Without grouping: a batch containing sequences of length 900 and 50
+  results in padding waste (all sequences padded to 900). With grouping,
+  short and long sequences go into separate batches, minimizing padding.
+
+  Dynamic batch sizing by token budget (not fixed batch size) is what
+  actually prevents OOM: fewer long sequences per batch, more short ones.
+\end{keyconcept}
+
+\section{Gradient Checkpointing}
+
+\begin{keyconcept}
+  Instead of storing all activations for backprop, gradient checkpointing
+  stores only activations at checkpoint boundaries and recomputes the
+  rest during the backward pass.
+
+  \textbf{Tradeoff}: $\sim$30\% slower forward+backward, but memory
+  savings are dramatic. On GPT-2 Large (36 layers):
+  \begin{center}
+  73 GB $\rightarrow$ 33 GB ($\sim$55\% reduction)
+  \end{center}
+
+  Implementation: wrap each TransformerBlock in
+  \texttt{torch.utils.checkpoint.checkpoint()} with
+  \texttt{use\_reentrant=False}.
+\end{keyconcept}
+
+\section{LoRA (Low-Rank Adaptation)}
+
+LoRA freezes the original weights and adds trainable low-rank matrices:
+
+\[
+  h = Wx + \frac{\alpha}{r} BAx
+\]
+
+where:
+\begin{itemize}
+  \item $W \in \mathbb{R}^{d_{\text{out}} \times d_{\text{in}}}$ is the
+        frozen pretrained weight matrix
+  \item $B \in \mathbb{R}^{d_{\text{out}} \times r}$, initialized to zeros
+  \item $A \in \mathbb{R}^{r \times d_{\text{in}}}$, initialized from
+        $\mathcal{N}(0, \sigma^2)$ where $\sigma = 0.02$
+  \item $r \ll d_{\text{in}}, d_{\text{out}}$ is the LoRA rank
+  \item $\alpha$ is the scaling factor; effective scaling is $\alpha / r$
+\end{itemize}
+
+\begin{keyconcept}
+  \textbf{Why $B$ is zero-initialized}: At the start of fine-tuning,
+  $BA = 0$ so $h = Wx$, meaning the model behaves exactly like the
+  pretrained model. The LoRA update grows from zero.
+
+  \textbf{Practical impact}: LoRA reduces trainable parameters from
+  $\sim$780M to $\sim$6M on GPT-2 Large. The main savings come from
+  eliminating optimizer states (Adam stores 2 extra tensors per
+  parameter) and gradients for frozen weights.
+\end{keyconcept}
+
+\section*{Review Questions}
+
+\begin{reviewquestion}[1]
+  Why does instruction fine-tuning use \texttt{ignore\_index = -100}
+  instead of a separate mask tensor? What are the two types of tokens
+  that should be masked out?
+\end{reviewquestion}
+
+\begin{reviewquestion}[2]
+  Explain how length-grouped batching reduces padding waste. Why do
+  we add noise to sequence lengths before sorting?
+\end{reviewquestion}
+
+\begin{reviewquestion}[3]
+  LoRA initializes $B$ to zeros. Explain why this is important for
+  fine-tuning. What would happen if $B$ were randomly initialized
+  instead?
+\end{reviewquestion}

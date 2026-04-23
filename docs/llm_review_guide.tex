@@ -1,0 +1,60 @@
+\documentclass[11pt,a4paper]{book}
+
+% ── Packages ──────────────────────────────────────────────────────────
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{alltt}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit,calc,decorations.pathreplacing}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\tcbuselibrary{skins,breakable}
+
+% ── Colors ────────────────────────────────────────────────────────────
+\definecolor{accent}{HTML}{2E86AB}
+\definecolor{highlight}{HTML}{A23B72}
+\definecolor{darkbg}{HTML}{F5F5F5}
+\definecolor{questionbg}{HTML}{FFF3CD}
+\definecolor{pseudobg}{HTML}{E8F4FD}
+
+% ── tcolorbox styles ─────────────────────────────────────────────────
+\newtcolorbox{keyconcept}[1][]{%
+  colback=accent!8, colframe=accent!80!black,
+  fonttitle=\bfseries, title=Key Concept #1, breakable}
+
+\newtcolorbox{reviewquestion}[1][]{%
+  colback=questionbg, colframe=highlight!70!black,
+  fonttitle=\bfseries, title=Review Question #1, breakable}
+
+\newtcolorbox{pseudocode}[1][]{%
+  colback=pseudobg, colframe=accent!50!black,
+  fonttitle=\bfseries\ttfamily, title=#1, breakable}
+
+% ── Meta ──────────────────────────────────────────────────────────────
+\title{\Huge\textbf{Building an LLM from Scratch}\\[6pt]
+       \Large Review Guide}
+\author{Based on project sessions 1--26}
+\date{\today}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accent,
+  urlcolor=accent,
+}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\input{chapters/chapter1_tokenization}
+\input{chapters/chapter2_attention}
+\input{chapters/chapter3_gpt_architecture}
+\input{chapters/chapter4_pretraining}
+\input{chapters/chapter5_pretrained_weights}
+\input{chapters/chapter6_finetuning}
+\input{chapters/chapter7_modern_architecture}
+
+\end{document}

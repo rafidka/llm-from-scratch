@@ -1,0 +1,132 @@
+\chapter{Pretraining}
+
+\section{Cross-Entropy Loss for Next-Token Prediction}
+
+The model outputs logits of shape $[\text{batch} \times \text{seq\_len},
+\text{vocab\_size}]$. The target is the shifted token IDs of shape
+$[\text{batch} \times \text{seq\_len}]$.
+
+\[
+  \mathcal{L} = -\frac{1}{N}\sum_{i=1}^{N} \log P(w_{i+1} \mid w_1, \ldots, w_i)
+\]
+
+\begin{keyconcept}
+  Cross-entropy expects:
+  \begin{itemize}
+    \item \textbf{Input}: logits $[\text{batch} \times \text{seq}, \text{vocab}]$
+    \item \textbf{Target}: integer class indices $[\text{batch} \times \text{seq}]$
+  \end{itemize}
+  The target is the input shifted by 1 position: ``The cat sat'' $\rightarrow$
+  ``cat sat on''.
+\end{keyconcept}
+
+\section{Training Loop with AdamW}
+
+\begin{pseudocode}[Training Loop]
+\textbf{for} epoch $= 1$ \textbf{to} $E$:\\
+\quad \textbf{for} batch \textbf{in} dataloader:\\
+\quad\quad logits $\leftarrow$ model(batch.input)\\
+\quad\quad loss $\leftarrow$ CrossEntropy(logits, batch.target)\\
+\quad\quad loss.backward()\\
+\quad\quad optimizer.step()\\
+\quad\quad optimizer.zero\_grad()
+\end{pseudocode}
+
+\begin{keyconcept}
+  \textbf{AdamW} decouples weight decay from the gradient update:
+  \[
+    \theta_{t+1} = \theta_t - \eta\left(\frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon} + \lambda \theta_t\right)
+  \]
+  Typical hyperparameters: $\text{lr} = 3 \times 10^{-4}$,
+  weight decay $= 0.01$, $\beta_1 = 0.9$, $\beta_2 = 0.999$.
+\end{keyconcept}
+
+\section{Learning Rate Scheduling}
+
+The learning rate follows a \textbf{warmup + cosine decay} schedule:
+
+\[
+  \text{lr}(t) =
+  \begin{cases}
+    \text{max\_lr} \cdot \frac{t}{T_w} & \text{if } t \leq T_w \\[6pt]
+    \text{min\_lr} + \frac{1}{2}(\text{max\_lr} - \text{min\_lr})
+    \left(1 + \cos\!\left(\pi \cdot \frac{t - T_w}{T - T_w}\right)\right)
+    & \text{if } t > T_w
+  \end{cases}
+\]
+
+where $T_w$ is the number of warmup steps (typically 10\% of total) and
+$T$ is the total number of training steps. $\text{min\_lr}$ is typically
+$\text{max\_lr} / 10$.
+
+\begin{keyconcept}
+  \textbf{Warmup} prevents instability at the start of training when
+  gradients are large and the model is randomly initialized. \textbf{Cosine
+  decay} allows the learning rate to decrease smoothly, enabling
+  finer parameter adjustments in later stages of training.
+\end{keyconcept}
+
+\section{Weight Initialization}
+
+GPT-2 initializes weights from $\mathcal{N}(0, 0.02)$ for embeddings
+and linear layers. This small standard deviation prevents early
+training instability.
+
+\section{Gradient Accumulation}
+
+When batch size is limited by GPU memory, gradient accumulation
+simulates larger batches:
+
+\begin{pseudocode}[Gradient Accumulation]
+\textbf{for} step $= 1$ \textbf{to} total\_steps:\\
+\quad batch\_loss $\leftarrow$ model(batch)\\
+\quad scaled\_loss $\leftarrow$ batch\_loss / grad\_accml\_steps\\
+\quad scaled\_loss.backward() \hfill $\triangleright$ Accumulate gradients\\
+\quad \textbf{if} step \% grad\_accml\_steps $== 0$:\\
+\quad\quad optimizer.step()\\
+\quad\quad optimizer.zero\_grad()
+\end{pseudocode}
+
+\begin{keyconcept}
+  Dividing the loss by \texttt{grad\_accml\_steps} ensures that the
+  effective gradient magnitude is the same as with a true large batch.
+  Without this division, gradients would be too large by a factor of
+  \texttt{grad\_accml\_steps}.
+\end{keyconcept}
+
+\section{Mixed Precision Training}
+
+Using \texttt{torch.autocast} with \textbf{bfloat16} (or float16):
+
+\begin{pseudocode}[Mixed Precision]
+\textbf{with} autocast(device\_type="cuda", dtype=bfloat16):\\
+\quad logits $\leftarrow$ model(batch)\\
+\quad loss $\leftarrow$ criterion(logits, targets)\\[3pt]
+loss.backward()\\
+optimizer.step()
+\end{pseudocode}
+
+\begin{keyconcept}
+  Mixed precision stores weights in float32 but computes forward/backward
+  passes in bfloat16, halving memory usage and often doubling throughput
+  on modern GPUs. Bfloat16 has the same dynamic range as float32 (8 exponent
+  bits), avoiding the overflow/underflow issues of float16.
+\end{keyconcept}
+
+\section*{Review Questions}
+
+\begin{reviewquestion}[1]
+  Why does gradient accumulation divide the loss by the number of
+  accumulation steps? What would happen to the effective learning rate
+  without this division?
+\end{reviewquestion}
+
+\begin{reviewquestion}[2]
+  Sketch the warmup + cosine decay learning rate curve. What happens if
+  you skip warmup and start at max\_lr immediately?
+\end{reviewquestion}
+
+\begin{reviewquestion}[3]
+  Why does bfloat16 have a wider dynamic range than float16? How many
+  exponent bits does each format use?
+\end{reviewquestion}

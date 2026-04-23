@@ -1,0 +1,100 @@
+\chapter{Loading Pretrained Weights}
+
+\section{HuggingFace GPT-2 Weight Layout}
+
+HuggingFace's GPT-2 uses \texttt{Conv1D} layers instead of
+\texttt{nn.Linear}. The key difference:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+ & \textbf{HuggingFace (Conv1D)} & \textbf{Our code (Linear)} \\
+\midrule
+Weight shape & $[\text{in\_features}, \text{out\_features}]$ & $[\text{out\_features}, \text{in\_features}]$ \\
+Transpose needed? & Yes & No \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Weight Mapping}
+
+The mapping between our architecture and HuggingFace's naming:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Our name} & \textbf{HuggingFace name} \\
+\midrule
+\texttt{embedding.token.weight} & \texttt{transformer.wte.weight} \\
+\texttt{embedding.positional.weight} & \texttt{transformer.wpe.weight} \\
+\texttt{blocks[$i$].attn.W\_q.weight} & \texttt{transformer.h[$i$].attn.c\_attn.weight}[:, :768] \\
+\texttt{blocks[$i$].attn.W\_k.weight} & \texttt{transformer.h[$i$].attn.c\_attn.weight}[:, 768:1536] \\
+\texttt{blocks[$i$].attn.W\_v.weight} & \texttt{transformer.h[$i$].attn.c\_attn.weight}[:, 1536:] \\
+\texttt{blocks[$i$].attn.W\_o.weight} & \texttt{transformer.h[$i$].attn.c\_proj.weight} \\
+\texttt{blocks[$i$].ff.ff1.weight} & \texttt{transformer.h[$i$].mlp.c\_fc.weight} \\
+\texttt{blocks[$i$].ff.ff2.weight} & \texttt{transformer.h[$i$].mlp.c\_proj.weight} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{keyconcept}
+  HuggingFace stores Q, K, V as a single fused matrix
+  \texttt{c\_attn} of shape $[768, 2304]$, which is the concatenation
+  of $W_Q$, $W_K$, $W_V$ along the output dimension. We split this
+  into three separate $[768, 768]$ matrices.
+\end{keyconcept}
+
+\section{Weight Tying}
+
+In GPT-2, the token embedding matrix and the output projection (LM
+head) share weights:
+
+\[
+  \texttt{lm\_head.weight} = \texttt{embedding.token.weight}
+\]
+
+\begin{keyconcept}
+  Weight tying saves $\sim$38M parameters for GPT-2 Small
+  (vocabulary size 50,257 $\times$ embedding dimension 768). It also
+  ensures that the same representations used to embed tokens are used
+  to predict them, which has been shown to improve performance.
+\end{keyconcept}
+
+\section{Perplexity Evaluation}
+
+\textbf{Perplexity} is the standard metric for evaluating language models:
+
+\[
+  \text{Perplexity} = \exp\!\left(\frac{1}{N}\sum_{i=1}^{N} -\log P(w_i \mid w_{<i})\right)
+  = \exp(\text{average cross-entropy loss})
+\]
+
+\begin{keyconcept}
+  Perplexity can be interpreted as ``on average, how many tokens is the
+  model equally uncertain about at each step.'' A perplexity of 30
+  means the model is as uncertain as if it were choosing uniformly
+  among 30 tokens.
+
+  \textbf{Context length matters}: longer contexts give lower perplexity
+  because the model has more information. Always compare perplexity at
+  the same context length.
+\end{keyconcept}
+
+\section*{Review Questions}
+
+\begin{reviewquestion}[1]
+  HuggingFace GPT-2 uses Conv1D with weight shape
+  $[\text{in}, \text{out}]$ while PyTorch's \texttt{nn.Linear} uses
+  $[\text{out}, \text{in}]$. What operation must you perform when
+  loading weights?
+\end{reviewquestion}
+
+\begin{reviewquestion}[2]
+  Explain weight tying between the token embedding and the LM head.
+  Why does it make sense for these two matrices to share parameters?
+\end{reviewquestion}
+
+\begin{reviewquestion}[3]
+  You evaluate the same model at context length 128 and context length
+  1024. Which evaluation gives lower perplexity, and why?
+\end{reviewquestion}

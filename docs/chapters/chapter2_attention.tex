@@ -1,0 +1,163 @@
+\chapter{Attention Mechanism}
+
+\section{Simplified Self-Attention}
+
+The simplest form of self-attention uses no learnable parameters:
+the input embeddings directly produce attention weights.
+
+\[
+  \text{scores} = X \cdot X^\top, \qquad
+  \text{attn\_weights} = \text{softmax}(\text{scores}), \qquad
+  \text{output} = \text{attn\_weights} \cdot X
+\]
+
+\begin{keyconcept}
+  Self-attention lets each position in a sequence attend to (i.e.,
+  compute a weighted average of) all other positions. Without learnable
+  parameters, it computes similarity purely from the embedding geometry.
+\end{keyconcept}
+
+\section{Scaled Dot-Product Attention}
+
+Adding learnable projections $W_Q$, $W_K$, $W_V$ transforms raw
+embeddings into queries, keys, and values that the model can adapt:
+
+\[
+  \text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V
+\]
+
+\begin{keyconcept}
+  \textbf{Why scale by $\sqrt{d_k}$?} Without scaling, large
+  dot products push softmax into saturation (near-one and near-zero
+  outputs), leading to tiny gradients. Dividing by $\sqrt{d_k}$ keeps
+  the softmax in its linear regime where gradients are healthy.
+\end{keyconcept}
+
+\section{Causal (Masked) Self-Attention}
+
+In autoregressive models, positions must not attend to future tokens.
+A causal mask sets future scores to $-\infty$ before softmax:
+
+\[
+  \text{mask}_{ij} =
+  \begin{cases}
+    0 & \text{if } j \leq i \\
+    -\infty & \text{if } j > i
+  \end{cases}
+\]
+
+\begin{tikzpicture}[scale=0.45, every node/.style={font=\tiny}]
+  \node at (2.5, 5.2) {Causal Mask (white=attend, black=block)};
+  \foreach \i in {0,...,4} {
+    \foreach \j in {0,...,4} {
+      \pgfmathtruncatemacro{\val}{\j <= \i ? 1 : 0}
+      \ifnum\val=1
+        \node[draw, fill=white, minimum size=0.7cm] at (\j, -\i) {};
+      \else
+        \node[draw, fill=black!80, text=white, minimum size=0.7cm] at (\j, -\i) {};
+      \fi
+    }
+  }
+\end{tikzpicture}
+
+\begin{keyconcept}
+  Note: we use
+  \texttt{masked\_fill(mask, -inf)} rather than multiplying,
+  because $0 \times (-\infty) = \text{NaN}$.
+  \texttt{masked\_fill} is differentiable and avoids NaN entirely.
+\end{keyconcept}
+
+\section{Multi-Head Attention}
+
+Instead of one attention computation, multi-head attention splits the
+embedding dimension into $h$ heads, each attending independently, then
+concatenates and projects the result.
+
+\begin{pseudocode}[Multi-Head Attention]
+$Q \leftarrow W_Q(x)$, \quad $K \leftarrow W_K(x)$, \quad $V \leftarrow W_V(x)$\\[3pt]
+Reshape $Q, K, V$ to $[\text{batch}, h, \text{seq}, d_k]$\\
+\textbf{for} each head $i$:\\
+\quad $\text{head}_i \leftarrow \text{Attention}(Q_i, K_i, V_i)$\\
+$\text{concat} \leftarrow [\text{head}_1; \ldots; \text{head}_h]$\\
+$\text{output} \leftarrow W_O(\text{concat})$
+\end{pseudocode}
+
+\begin{keyconcept}
+  The reshaping pattern is:
+  \begin{itemize}
+    \item \textbf{Split}: $[\text{batch}, \text{seq}, \text{embed}] \rightarrow
+          [\text{batch}, h, \text{seq}, d_k]$
+    \item \textbf{Attend}: each head computes scaled dot-product attention
+    \item \textbf{Concat}: $[\text{batch}, h, \text{seq}, d_k] \rightarrow
+          [\text{batch}, \text{seq}, \text{embed}]$
+  \end{itemize}
+  The output projection $W_O$ is essential---without it, heads cannot
+  interact and mix information.
+\end{keyconcept}
+
+\section{Attention as Soft Dictionary Lookup}
+
+Attention can be viewed as a \emph{differentiable dictionary}:
+\begin{itemize}
+  \item \textbf{Keys} are dictionary entries (labels)
+  \item \textbf{Queries} are what you're looking for
+  \item \textbf{Values} are the contents stored at each entry
+  \item The softmax produces a \emph{soft} lookup that returns a
+        weighted combination of values
+\end{itemize}
+
+Untrained attention (using random or static embeddings) produces
+noisy, unstructured patterns. Learned attention captures meaningful
+syntactic and semantic relationships.
+
+\begin{keyconcept}
+  \textbf{Layer depth matters}: early layers tend to capture local
+  syntactic patterns (e.g., attending to adjacent words), while later
+  layers capture broader semantic relationships (e.g., attending to
+  related concepts across the sequence).
+\end{keyconcept}
+
+\section{\texorpdfstring{$O(n^2)$}{O(n²)} Complexity and Modern Solutions}
+
+The attention matrix is $n \times n$, giving:
+\begin{itemize}
+  \item \textbf{Time}: $O(n^2 d)$ for computing attention scores
+  \item \textbf{Space}: $O(n^2)$ for storing the attention matrix
+\end{itemize}
+
+For a 128K-token context, that's $\sim$16 billion entries per attention
+matrix. Modern solutions include:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Technique} & \textbf{Effect} \\
+\midrule
+KV Cache & Avoids recomputing past K/V during generation \\
+Grouped Query Attention (GQA) & Reduces KV head count \\
+Flash Attention & IO-aware algorithm, same $O(n^2)$ but faster \\
+Sliding Window Attention & Limits attention to local context \\
+Linear Attention & Approximates softmax for $O(n)$ complexity \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section*{Review Questions}
+
+\begin{reviewquestion}[1]
+  Why does scaled dot-product attention divide by $\sqrt{d_k}$ rather
+  than $d_k$? What would happen with $\sqrt{d_k}$ omitted for a model
+  with $d_k = 64$?
+\end{reviewquestion}
+
+\begin{reviewquestion}[2]
+  Explain why the output projection $W_O$ in multi-head attention is
+  necessary. What would happen if you removed it and just concatenated
+  the heads?
+\end{reviewquestion}
+
+\begin{reviewquestion}[3]
+  Consider a causal language model processing a 128K-token context.
+  Assuming 12 layers and 12 heads per layer, how many $n \times n$
+  attention matrices are computed during a single forward pass?
+\end{reviewquestion}

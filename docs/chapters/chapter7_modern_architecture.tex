@@ -1,0 +1,203 @@
+\chapter{Modern Architecture Deep Dives}
+
+\section{RMSNorm}
+
+RMSNorm simplifies LayerNorm by removing mean subtraction and bias:
+
+\begin{align*}
+  \textbf{LayerNorm:} \quad & \hat{x}_i = \frac{x_i - \mu}{\sqrt{\sigma^2 + \epsilon}}, \quad y_i = \gamma \hat{x}_i + \beta \\[6pt]
+  \textbf{RMSNorm:} \quad & \hat{x}_i = \frac{x_i}{\sqrt{\frac{1}{d}\sum_{j=1}^{d} x_j^2 + \epsilon}}, \quad y_i = \gamma \hat{x}_i
+\end{align*}
+
+Key differences:
+\begin{itemize}
+  \item RMSNorm removes \textbf{mean subtraction}: it only rescales, not
+        recenters
+  \item RMSNorm has \textbf{no bias} parameter ($\beta$), only a gain
+        $\gamma$
+  \item In practice, negligible speed difference---normalization is a
+        tiny fraction of total compute
+\end{itemize}
+
+\begin{keyconcept}
+  \textbf{Float32 upcasting}: Both LayerNorm and RMSNorm must upcast to
+  float32 before computing mean/variance/RMS. Low-precision types (bf16,
+  fp16) can overflow or lose precision in these reduction operations.
+  After computing the normalization in float32, the result is cast back
+  to the original dtype before the affine transform.
+\end{keyconcept}
+
+\section{RoPE (Rotary Positional Embeddings)}
+
+RoPE encodes position by \emph{rotating} pairs of dimensions in the
+query and key vectors, rather than adding positional embeddings.
+
+\subsection{The Key Idea}
+
+For each pair of dimensions $(2i, 2i+1)$ at position $m$:
+
+\[
+  \begin{bmatrix} q_{2i}' \\ q_{2i+1}' \end{bmatrix}
+  =
+  \begin{bmatrix} \cos(m\theta_i) & -\sin(m\theta_i) \\ \sin(m\theta_i) & \cos(m\theta_i) \end{bmatrix}
+  \begin{bmatrix} q_{2i} \\ q_{2i+1} \end{bmatrix}
+\]
+
+where $\theta_i = \frac{1}{\text{base}^{2i/d}}$ (base = 10000 by
+default).
+
+This is a 2D rotation by angle $m\theta_i$.
+
+\subsection{Efficient Implementation: Rotate-and-Interleave}
+
+Instead of handling pairs explicitly, we use the identity:
+
+\[
+  q' = q \odot \cos(m\boldsymbol{\theta}) + \text{rotate\_half}(q) \odot \sin(m\boldsymbol{\theta})
+\]
+
+where $\text{rotate\_half}$ constructs $(-q_{2i+1}, q_{2i})$ for each
+pair, then interleaves. In code:
+
+\begin{pseudocode}[Apply Rotary Embedding]
+Reshape $x$ to $[\ldots, d/2, 2]$ \hfill\textrm{\small (pair up dimensions)}\\
+$x_{\text{rot}} \leftarrow$ stack $(-x[\ldots, 1], x[\ldots, 0])$ along last dim\\
+$x_{\text{rot}} \leftarrow$ flatten $x_{\text{rot}}$ \hfill\textrm{\small (interleave back)}\\
+\textbf{return} $x \odot \cos + x_{\text{rot}} \odot \sin$
+\end{pseudocode}
+
+\begin{keyconcept}
+  \textbf{Critical property}: With RoPE, the dot product
+  $q_m^\top k_n$ depends \emph{only on the relative distance} $(m - n)$,
+  not on absolute positions. This is because the rotation angle for $q$
+  at position $m$ minus the rotation angle for $k$ at position $n$ equals
+  the angle for relative position $(m-n)$.
+
+  \textbf{RoPE is applied only to Q and K, never to V}. Position
+  information enters exclusively through attention scores.
+\end{keyconcept}
+
+\section{SwiGLU}
+
+SwiGLU replaces the standard GELU FFN with a gated architecture:
+
+\begin{align*}
+  \textbf{GELU FFN:} & \quad \text{FFN}(x) = W_2\!\left(\text{GELU}(W_1 x)\right) \\[4pt]
+  \textbf{SwiGLU:} & \quad \text{FFN}(x) = W_{\text{down}}\!\left(W_{\text{gate}}(x) \odot \text{SiLU}(W_{\text{up}}(x))\right)
+\end{align*}
+
+where $\text{SiLU}(x) = x \cdot \sigma(x)$ (also called ``swish'').
+
+\begin{keyconcept}
+  \textbf{Key differences from standard FFN}:
+  \begin{itemize}
+    \item 3 linear layers instead of 2 ($W_{\text{gate}}$,
+          $W_{\text{up}}$, $W_{\text{down}}$)
+    \item The gate controls which features pass through: when
+          $\text{SiLU}(W_{\text{up}}(x)) \approx 0$, the gate ``closes''
+          and blocks information
+    \item Despite having more parameters per layer, SwiGLU is
+          empirically more parameter-efficient---it matches or exceeds
+          GELU FFN quality with fewer total parameters
+  \end{itemize}
+
+  LLaMA compensates for the extra projection by using
+  $d_{\text{ff}} = \frac{2}{3} \cdot 4d_{\text{model}}$ instead of
+  $4d_{\text{model}}$; our implementation keeps $4d_{\text{model}}$
+  for simplicity.
+\end{keyconcept}
+
+\section{\texorpdfstring{GQA}{GQA} (Grouped Query Attention)}
+
+GQA reduces the KV cache by sharing KV heads across groups of query
+heads:
+
+\begin{center}
+\begin{tikzpicture}[
+  node distance=0.3cm and 0.8cm,
+  qnode/.style={rectangle, draw, fill=accent!30, minimum width=0.5cm, minimum height=0.5cm, font=\tiny},
+  kvnode/.style={rectangle, draw, fill=highlight!30, minimum width=0.5cm, minimum height=0.5cm, font=\tiny},
+  label/.style={font=\small\bfseries}
+]
+ 
+  \node[label] (mhlabel) {MHA};
+  \foreach \i in {1,...,8} {
+    \node[qnode, right=0.15cm of mhlabel] (q\i) at ({1.5+\i*0.4}, 0) {};
+    \node[kvnode, below=0.2cm of q\i] {};
+  }
+  
+  \node[label, right=1.2cm of q8] (gqlabel) {GQA};
+  \foreach \i in {1,...,8} {
+    \node[qnode] (gq\i) at ({7+\i*0.4}, 0) {};
+  }
+  \foreach \i in {1,2} { \node[kvnode] (gkv\i) at ({7.2+\i*1.6}, -0.7) {}; }
+  \draw[-{Stealth}, gray] (gq1.south) -- (gkv1.north);
+  \draw[-{Stealth}, gray] (gq2.south) -- (gkv1.north);
+  \draw[-{Stealth}, gray] (gq3.south) -- (gkv1.north);
+  \draw[-{Stealth}, gray] (gq4.south) -- (gkv1.north);
+  \draw[-{Stealth}, gray] (gq5.south) -- (gkv2.north);
+  \draw[-{Stealth}, gray] (gq6.south) -- (gkv2.north);
+  \draw[-{Stealth}, gray] (gq7.south) -- (gkv2.north);
+  \draw[-{Stealth}, gray] (gq8.south) -- (gkv2.north);
+  
+  \node[label, right=1.2cm of gq8] (mqlabel) {MQA};
+  \foreach \i in {1,...,8} {
+    \node[qnode] (mq\i) at ({12.5+\i*0.4}, 0) {};
+  }
+  \node[kvnode] (mkv) at ({14.1}, -0.7) {};
+  \foreach \i in {1,...,8} {
+    \draw[-{Stealth}, gray] (mq\i.south) -- (mkv.north);
+  }
+\end{tikzpicture}
+\end{center}
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+ & \textbf{MHA} & \textbf{GQA} & \textbf{MQA} \\
+\midrule
+Query heads & $h$ & $h$ & $h$ \\
+KV heads & $h$ & $h_{\text{kv}} < h$ & 1 \\
+Group size & 1 & $h / h_{\text{kv}}$ & $h$ \\
+KV cache savings & None & $\times\, h_{\text{kv}}/h$ & $\times\, 1/h$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{keyconcept}
+  \textbf{Implementation}: After computing K and V with the smaller
+  $W_K$ and $W_V$ matrices ($d_{\text{model}} \rightarrow h_{\text{kv}}
+  \cdot d_k$), we expand them using
+  \texttt{repeat\_interleave} to match the number of query heads:
+
+  \begin{enumerate}
+    \item Compute K, V with reduced projection: $[b, s, h_{\text{kv}} \cdot d_k]$
+    \item Reshape: $[b, s, h_{\text{kv}}, d_k]$
+    \item Transpose: $[b, h_{\text{kv}}, s, d_k]$
+    \item Expand: $[b, h, s, d_k]$ via \texttt{repeat\_interleave}
+  \end{enumerate}
+
+  RoPE is applied \emph{after} KV expansion to avoid subtle numerical
+  issues. The special cases: $h_{\text{kv}} = h$ gives standard MHA,
+  $h_{\text{kv}} = 1$ gives Multi-Query Attention (MQA).
+\end{keyconcept}
+
+\section*{Review Questions}
+
+\begin{reviewquestion}[1]
+  RMSNorm removes both mean subtraction and the bias parameter compared
+  to LayerNorm. What is the intuition for why removing mean subtraction
+  still works well?
+\end{reviewquestion}
+
+\begin{reviewquestion}[2]
+  Prove that with RoPE, the dot product $q_m^\top k_n$ depends only on
+  the relative position $(m - n)$, not on absolute positions $m$ and $n$
+  individually. (Hint: use the 2D rotation formulation.)
+\end{reviewquestion}
+
+\begin{reviewquestion}[3]
+  Consider a model with 32 query heads and 4 KV heads using GQA.
+  During autoregressive generation, how much smaller is the KV cache
+  compared to standard MHA? At what cost?
+\end{reviewquestion}
