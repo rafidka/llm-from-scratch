@@ -47,9 +47,13 @@ class TransformerBlock(nn.Module):
         num_heads: int,
         dropout: float = 0.1,
         use_rms_norm: bool = False,
+        use_rope: bool = False,
+        max_seq_len: int = 1024,
     ):
         super().__init__()
-        self.attn = MultiHeadAttention(embed_dim, num_heads, causal=True)
+        self.attn = MultiHeadAttention(
+            embed_dim, num_heads, causal=True, use_rope=use_rope, max_seq_len=max_seq_len
+        )
         self.ln1 = RMSNorm(embed_dim) if use_rms_norm else nn.LayerNorm(embed_dim)
         self.ff = FeedForward(embed_dim, 4 * embed_dim, dropout)
         self.ln2 = RMSNorm(embed_dim) if use_rms_norm else nn.LayerNorm(embed_dim)
@@ -80,6 +84,7 @@ class GPT(nn.Module):
         dropout: float,
         use_gradient_checkpointing: bool = False,
         use_rms_norm: bool = False,
+        use_rope: bool = False,
     ):
         super().__init__()
 
@@ -92,11 +97,19 @@ class GPT(nn.Module):
         self.dropout = dropout
         self.use_gradient_checkpointing = use_gradient_checkpointing
         self.use_rms_norm = use_rms_norm
+        self.use_rope = use_rope
 
-        self.embeddings = GPTEmbeddings(vocab_size, embed_dim, max_seq_len)
+        # TODO: If use_rope is True, skip the positional embedding in GPTEmbeddings.
+        # RoPE encodes position in the attention layer, so adding learned positional
+        # embeddings is redundant (and would conflate two position signals).
+        # Option 1: Pass use_rope to GPTEmbeddings and conditionally zero out pos_emb.
+        # Option 2: Skip GPTEmbeddings.positional entirely and only use token embeddings.
+        self.embeddings = GPTEmbeddings(vocab_size, embed_dim, max_seq_len, use_rope)
         self.transformer_blocks = nn.ModuleList(
             [
-                TransformerBlock(embed_dim, num_heads, dropout, use_rms_norm)
+                TransformerBlock(
+                    embed_dim, num_heads, dropout, use_rms_norm, use_rope, max_seq_len
+                )
                 for _ in range(num_layers)
             ]
         )
@@ -109,6 +122,7 @@ class GPT(nn.Module):
         max_seq_len: int,
         use_gradient_checkpointing: bool = False,
         use_rms_norm: bool = False,
+        use_rope: bool = False,
     ):
         """Create a very small GPT model for testing purposes.
 
@@ -124,6 +138,7 @@ class GPT(nn.Module):
             dropout=0.0,
             use_gradient_checkpointing=use_gradient_checkpointing,
             use_rms_norm=use_rms_norm,
+            use_rope=use_rope,
         )
 
     @classmethod
@@ -133,6 +148,7 @@ class GPT(nn.Module):
         max_seq_len: int = 1024,
         use_gradient_checkpointing: bool = False,
         use_rms_norm: bool = False,
+        use_rope: bool = False,
     ):
         """GPT-2 Small: 124M parameters"""
         return cls(
@@ -144,6 +160,7 @@ class GPT(nn.Module):
             dropout=0.1,
             use_gradient_checkpointing=use_gradient_checkpointing,
             use_rms_norm=use_rms_norm,
+            use_rope=use_rope,
         )
 
     @classmethod
@@ -153,6 +170,7 @@ class GPT(nn.Module):
         max_seq_len: int = 1024,
         use_gradient_checkpointing: bool = False,
         use_rms_norm: bool = False,
+        use_rope: bool = False,
     ):
         """GPT-2 Medium: 355M parameters"""
         return cls(
@@ -164,6 +182,7 @@ class GPT(nn.Module):
             dropout=0.1,
             use_gradient_checkpointing=use_gradient_checkpointing,
             use_rms_norm=use_rms_norm,
+            use_rope=use_rope,
         )
 
     @classmethod
@@ -173,6 +192,7 @@ class GPT(nn.Module):
         max_seq_len: int = 1024,
         use_gradient_checkpointing: bool = False,
         use_rms_norm: bool = False,
+        use_rope: bool = False,
     ):
         """GPT-2 Large: 774M parameters"""
         return cls(
@@ -184,6 +204,7 @@ class GPT(nn.Module):
             dropout=0.1,
             use_gradient_checkpointing=use_gradient_checkpointing,
             use_rms_norm=use_rms_norm,
+            use_rope=use_rope,
         )
 
     def lorafy(self, rank: int, alpha: float, sigma: float = 0.02):

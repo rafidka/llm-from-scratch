@@ -709,4 +709,38 @@
 - [x] **RMSNorm** — Replace LayerNorm with RMSNorm, understand why
 
 ### Open questions
-- Next: RoPE (Rotary Positional Embeddings)
+- Next: SwiGLU
+
+---
+
+## Session 24 — 2026-04-22 — RoPE (Rotary Positional Embeddings)
+
+### What we covered
+- Implemented `RotaryEmbedding` module that precomputes cos/sin tables for all positions up to `max_seq_len`
+- Implemented `apply_rotary_emb` function applying 2D rotation to pairs of dimensions in Q/K
+- Wired RoPE into `MultiHeadAttention.forward()` — applied after reshaping Q/K into head format, before scaled_dot_product_attention
+- Modified `GPTEmbeddings` to skip positional embeddings when `use_rope=True`
+- Added `use_rope` flag through the entire model chain (GPT, TransformerBlock, MultiHeadAttention, factory methods)
+- Fixed bug: `apply_rotary_emb` returns a new tensor, must assign `q = apply_rotary_emb(q, ...)` not just call it
+
+### Key learnings
+- RoPE encodes position by rotating pairs of dimensions: angle `m * θ_i` where `θ_i = 1 / (base^(2i/d))`
+- The rotate-and-interleave trick: construct `(-x_2i+1, x_2i)` then `result = x * cos + rotated * sin` — avoids explicit pair handling
+- RoPE is applied only to Q and K, never V — position information enters through attention scores
+- With RoPE, `q_m · k_n` depends only on `(m - n)`, giving relative position encoding for free
+- `nn.Buffer` (PyTorch 2.5+) is cleaner than `register_buffer` for non-parameter tensors that should move with `.to(device)`
+- `repeat_interleave(repeats=2)` interleaves the half-dimension cos/sin to match the paired dimension layout
+
+### Code written
+- `src/llm_from_scratch/model/rope.py` — `RotaryEmbedding` class and `apply_rotary_emb` function
+- `src/llm_from_scratch/attention/scaled_dot_product.py` — Added `use_rope` and `max_seq_len` params to `MultiHeadAttention`, RoPE application in forward
+- `src/llm_from_scratch/model/embeddings.py` — Conditional positional embedding (skipped when `use_rope=True`)
+- `src/llm_from_scratch/model/base.py` — Added `use_rope` flag to `GPT`, `TransformerBlock`, all factory methods
+- `src/llm_from_scratch/model/causallm.py` — Threaded `use_rope` through `GPTForCausalLM`
+- `src/llm_from_scratch/model/classification.py` — Threaded `use_rope` through `GPTForClassification`
+
+### PLAN.md items completed
+- [x] **RoPE** — Replace absolute positional embeddings with Rotary Positional Embeddings
+
+### Open questions
+- Next: SwiGLU

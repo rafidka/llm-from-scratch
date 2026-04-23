@@ -6,6 +6,7 @@ import torch
 from torch import Tensor, nn
 
 from llm_from_scratch.model.lora import LoRALayer
+from llm_from_scratch.model.rope import RotaryEmbedding, apply_rotary_emb
 
 
 def scaled_dot_product_attention(
@@ -104,7 +105,14 @@ class SingleHeadAttention(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int, causal: bool):
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        causal: bool,
+        use_rope: bool = False,
+        max_seq_len: int = 1024,
+    ):
         super().__init__()
 
         # Find the head dimension
@@ -113,6 +121,14 @@ class MultiHeadAttention(nn.Module):
         self.head_dim = embed_dim // num_heads
         self.num_heads = num_heads
         self.causal = causal
+        self.use_rope = use_rope
+
+        # TODO: If use_rope is True, create a RotaryEmbedding(head_dim, max_seq_len)
+        # and store it as self.rotary_emb.
+        # If use_rope is False, set self.rotary_emb = None.
+        self.rotary_emb = (
+            RotaryEmbedding(self.head_dim, max_seq_len) if use_rope else None
+        )
 
         # Linear projections for W, K, and V.
         # Notice that, on paper, we should create num_heads linear projections, each
@@ -159,6 +175,16 @@ class MultiHeadAttention(nn.Module):
         k = self.W_k_lora(x) if self.W_k_lora else self.W_k(x)
         k = k.view(batch, seq_len, self.num_heads, self.head_dim)
         k = k.transpose(1, 2)  # transpose into [batch, num_heads, seq_len, head_dim]
+
+        # TODO: If self.use_rope, apply rotary embeddings to q and k here.
+        # Call self.rotary_emb(seq_len) to get (cos, sin), then call
+        # apply_rotary_emb(q, cos, sin) and apply_rotary_emb(k, cos, sin).
+        # Make sure cos/sin are on the same device as q.
+        # Note: RoPE is NOT applied to v.
+        if self.use_rope and self.rotary_emb:
+            cos, sin = self.rotary_emb(seq_len)
+            q = apply_rotary_emb(q, cos, sin)
+            k = apply_rotary_emb(k, cos, sin)
 
         v = self.W_v_lora(x) if self.W_v_lora else self.W_v(x)
         v = v.view(batch, seq_len, self.num_heads, self.head_dim)
