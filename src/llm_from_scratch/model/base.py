@@ -82,6 +82,7 @@ class TransformerBlock(nn.Module):
         use_rope: bool = False,
         max_seq_len: int = 1024,
         use_swiglu: bool = False,
+        num_kv_threads: int | None = None,
     ):
         super().__init__()
         self.attn = MultiHeadAttention(
@@ -90,6 +91,7 @@ class TransformerBlock(nn.Module):
             causal=True,
             use_rope=use_rope,
             max_seq_len=max_seq_len,
+            num_kv_heads=num_kv_threads,
         )
         self.ln1 = RMSNorm(embed_dim) if use_rms_norm else nn.LayerNorm(embed_dim)
         self.ff = (
@@ -127,6 +129,7 @@ class GPT(nn.Module):
         use_rms_norm: bool = False,
         use_rope: bool = False,
         use_swiglu: bool = False,
+        num_kv_threads: int | None = None,
     ):
         super().__init__()
 
@@ -152,6 +155,7 @@ class GPT(nn.Module):
                     use_rope,
                     max_seq_len,
                     use_swiglu,
+                    num_kv_threads=num_kv_threads,
                 )
                 for _ in range(num_layers)
             ]
@@ -167,6 +171,7 @@ class GPT(nn.Module):
         use_rms_norm: bool = False,
         use_rope: bool = False,
         use_swiglu: bool = False,
+        num_kv_threads: int | None = None,
     ):
         """Create a very small GPT model for testing purposes.
 
@@ -184,6 +189,7 @@ class GPT(nn.Module):
             use_rms_norm=use_rms_norm,
             use_rope=use_rope,
             use_swiglu=use_swiglu,
+            num_kv_threads=num_kv_threads,
         )
 
     @classmethod
@@ -195,6 +201,7 @@ class GPT(nn.Module):
         use_rms_norm: bool = False,
         use_rope: bool = False,
         use_swiglu: bool = False,
+        num_kv_threads: int | None = None,
     ):
         """GPT-2 Small: 124M parameters"""
         return cls(
@@ -208,6 +215,7 @@ class GPT(nn.Module):
             use_rms_norm=use_rms_norm,
             use_rope=use_rope,
             use_swiglu=use_swiglu,
+            num_kv_threads=num_kv_threads,
         )
 
     @classmethod
@@ -219,6 +227,7 @@ class GPT(nn.Module):
         use_rms_norm: bool = False,
         use_rope: bool = False,
         use_swiglu: bool = False,
+        num_kv_threads: int | None = None,
     ):
         """GPT-2 Medium: 355M parameters"""
         return cls(
@@ -232,6 +241,7 @@ class GPT(nn.Module):
             use_rms_norm=use_rms_norm,
             use_rope=use_rope,
             use_swiglu=use_swiglu,
+            num_kv_threads=num_kv_threads,
         )
 
     @classmethod
@@ -243,6 +253,7 @@ class GPT(nn.Module):
         use_rms_norm: bool = False,
         use_rope: bool = False,
         use_swiglu: bool = False,
+        num_kv_threads: int | None = None,
     ):
         """GPT-2 Large: 774M parameters"""
         return cls(
@@ -256,6 +267,7 @@ class GPT(nn.Module):
             use_rms_norm=use_rms_norm,
             use_rope=use_rope,
             use_swiglu=use_swiglu,
+            num_kv_threads=num_kv_threads,
         )
 
     def lorafy(self, rank: int, alpha: float, sigma: float = 0.02):

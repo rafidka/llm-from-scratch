@@ -768,4 +768,35 @@
 - [x] **SwiGLU** — Replace GELU FFN with SwiGLU activation
 
 ### Open questions
-- Next: GQA (Grouped Query Attention)
+- Next: KV Cache
+
+---
+
+## Session 26 — 2026-04-23 — GQA (Grouped Query Attention)
+
+### What we covered
+- Implemented GQA in `MultiHeadAttention` with `num_kv_heads` parameter (defaults to `num_heads` for MHA backward compatibility)
+- K/V projections reduced from `embed_dim → embed_dim` to `embed_dim → num_kv_heads * head_dim`
+- KV heads expanded via `repeat_interleave(group_size, dim=1)` to match Q head count before attention computation
+- Threaded `num_kv_threads` through `TransformerBlock`, `GPT`, `GPTForCausalLM`, `GPTForClassification`, all factory methods
+- Fixed `GPTForCausalLM` and `GPTForClassification` missing `use_swiglu` and `num_kv_threads` params
+
+### Key learnings
+- GQA shares KV heads across groups of Q heads: `group_size = num_heads / num_kv_heads`
+- Reduces KV cache size at inference time — dominant memory bottleneck in autoregressive generation
+- `repeat_interleave` copies data; `.expand` creates a zero-copy view but requires `.contiguous()` before some ops — used `repeat_interleave` for clarity
+- RoPE applied after KV expansion (standard approach, avoids subtle issues)
+- Special cases: `num_kv_heads = num_heads` → MHA, `num_kv_heads = 1` → MQA (Multi-Query Attention)
+- LLaMA-2 70B uses GQA (8 KV heads for 64 Q heads), LLaMA-1 uses MHA
+
+### Code written
+- `src/llm_from_scratch/attention/scaled_dot_product.py` — Added `num_kv_heads` param to `MultiHeadAttention`, smaller K/V projections, `repeat_interleave` expansion
+- `src/llm_from_scratch/model/base.py` — Added `num_kv_threads` to `TransformerBlock`, `GPT`, factory methods
+- `src/llm_from_scratch/model/causallm.py` — Threaded `use_swiglu` and `num_kv_threads`
+- `src/llm_from_scratch/model/classification.py` — Threaded `use_swiglu` and `num_kv_threads`
+
+### PLAN.md items completed
+- [x] **Grouped Query Attention (GQA)** — Implement KV head sharing
+
+### Open questions
+- Next: KV Cache

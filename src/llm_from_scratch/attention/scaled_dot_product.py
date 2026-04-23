@@ -112,6 +112,7 @@ class MultiHeadAttention(nn.Module):
         causal: bool,
         use_rope: bool = False,
         max_seq_len: int = 1024,
+        num_kv_heads: int | None = None,
     ):
         super().__init__()
 
@@ -120,12 +121,14 @@ class MultiHeadAttention(nn.Module):
             raise ValueError("num_heads doesn't evenly divide embed_dim")
         self.head_dim = embed_dim // num_heads
         self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads if num_kv_heads is not None else num_heads
+
+        if num_heads % self.num_kv_heads != 0:
+            raise ValueError("num_heads should be a multiple of num_kv_heads")
+        self.group_size = num_heads // self.num_kv_heads
         self.causal = causal
         self.use_rope = use_rope
 
-        # TODO: If use_rope is True, create a RotaryEmbedding(head_dim, max_seq_len)
-        # and store it as self.rotary_emb.
-        # If use_rope is False, set self.rotary_emb = None.
         self.rotary_emb = (
             RotaryEmbedding(self.head_dim, max_seq_len) if use_rope else None
         )
@@ -136,8 +139,8 @@ class MultiHeadAttention(nn.Module):
         # efficient, we just create one big matrix, and then partition the output. See
         # the forward() implementation for more info.
         self.W_q = nn.Linear(embed_dim, embed_dim)
-        self.W_k = nn.Linear(embed_dim, embed_dim)
-        self.W_v = nn.Linear(embed_dim, embed_dim)
+        self.W_k = nn.Linear(embed_dim, self.num_kv_heads * self.head_dim)
+        self.W_v = nn.Linear(embed_dim, self.num_kv_heads * self.head_dim)
 
         # Output projection
         self.W_o = nn.Linear(embed_dim, embed_dim)
@@ -173,22 +176,32 @@ class MultiHeadAttention(nn.Module):
         q = q.transpose(1, 2)  # transpose into [batch, num_heads, seq_len, head_dim]
 
         k = self.W_k_lora(x) if self.W_k_lora else self.W_k(x)
-        k = k.view(batch, seq_len, self.num_heads, self.head_dim)
-        k = k.transpose(1, 2)  # transpose into [batch, num_heads, seq_len, head_dim]
+        k = k.view(batch, seq_len, self.num_kv_heads, self.head_dim)
+        k = k.transpose(1, 2)  # transpose into [batch, num_kv_heads, seq_len, head_dim]
+        # Expand into [batch, num_heads, seq_len, head_dim]
+        # The code below is a trick to achieve the same effect as repeat_interleaved
+        # without copying memory.
+        k = (
+            k.view(batch, self.num_kv_heads, seq_len, self.head_dim)
+            .expand(-1, -1, self.group_size, -1, -1)
+            .view(batch, self.num_heads, seq_len, self.head_dim)
+        )
 
-        # TODO: If self.use_rope, apply rotary embeddings to q and k here.
-        # Call self.rotary_emb(seq_len) to get (cos, sin), then call
-        # apply_rotary_emb(q, cos, sin) and apply_rotary_emb(k, cos, sin).
-        # Make sure cos/sin are on the same device as q.
-        # Note: RoPE is NOT applied to v.
         if self.use_rope and self.rotary_emb:
             cos, sin = self.rotary_emb(seq_len)
             q = apply_rotary_emb(q, cos, sin)
             k = apply_rotary_emb(k, cos, sin)
 
         v = self.W_v_lora(x) if self.W_v_lora else self.W_v(x)
-        v = v.view(batch, seq_len, self.num_heads, self.head_dim)
-        v = v.transpose(1, 2)  # transpose into [batch, num_heads, seq_len, head_dim]
+        v = v.view(batch, seq_len, self.num_kv_heads, self.head_dim)
+        v = v.transpose(1, 2)  # transpose into [batch, num_kv_heads, seq_len, head_dim]
+        # The code below is a trick to achieve the same effect as repeat_interleaved
+        # without copying memory.
+        v = (
+            v.view(batch, self.num_kv_heads, seq_len, self.head_dim)
+            .expand(-1, -1, self.group_size, -1, -1)
+            .view(batch, self.num_heads, seq_len, self.head_dim)
+        )
 
         if attn_mask is not None:
             # Since this is a multi head attention, the q/k/v tensors became of shape

@@ -16,6 +16,8 @@ class GPTForClassification(GPT):
         use_gradient_checkpointing: bool = False,
         use_rms_norm: bool = False,
         use_rope: bool = False,
+        use_swiglu: bool = False,
+        num_kv_threads: int | None = None,
     ):
         super().__init__(
             vocab_size,
@@ -27,6 +29,8 @@ class GPTForClassification(GPT):
             use_gradient_checkpointing,
             use_rms_norm,
             use_rope,
+            use_swiglu,
+            num_kv_threads,
         )
         self.cls_head = nn.Linear(embed_dim, num_classes, bias=False)
 
