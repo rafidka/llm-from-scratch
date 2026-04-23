@@ -17,16 +17,6 @@ class RotaryEmbedding(nn.Module):
 
     def __init__(self, head_dim: int, max_seq_len: int, base: float = 10000.0):
         super().__init__()
-        # TODO: Precompute the frequency theta_i for each pair of dimensions.
-        # theta_i = 1 / (base ** (2i / head_dim)) for i = 0, 1, ..., head_dim // 2 - 1
-        # Then for each position m in [0, max_seq_len), compute the angle m * theta_i.
-        # Store cos and sin tensors as buffers (not parameters — they're fixed).
-        #
-        # Hints:
-        # - Use torch.arange and torch.outer to build the angle matrix
-        # - Shape should be (max_seq_len, head_dim) — one row per position,
-        #   with each pair of columns sharing the same angle
-        # - Register as buffers so they move with .to(device) but aren't parameters
         half_head_dim = head_dim // 2
         i = torch.arange(0, half_head_dim)
         theta_i = 1 / (base ** (2 * i / head_dim))
@@ -64,17 +54,6 @@ def apply_rotary_emb(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
     Returns:
         Tensor of same shape as x with rotary embeddings applied.
     """
-    # TODO:
-    # 1. Split x into pairs: x_2i and x_2i+1 for each dimension pair
-    #    (Try reshaping to (..., head_dim//2, 2) or using even/odd indexing)
-    # 2. Apply the 2D rotation using the cos/sin values
-    # 3. Interleave the rotated pairs back into the original dimension order
-    #
-    # Hint: A clean approach is to construct a "rotated" version of x where
-    # each pair (x_2i, x_2i+1) becomes (-x_2i+1, x_2i), then use:
-    #   result = x * cos + rotated_x * sin
-    # This avoids explicit interleaving.
-
     *_, head_dim = x.shape
     if head_dim % 2 != 0:
         raise ValueError(f"head_dim must be even, got {head_dim}")
