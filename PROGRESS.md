@@ -743,4 +743,29 @@
 - [x] **RoPE** — Replace absolute positional embeddings with Rotary Positional Embeddings
 
 ### Open questions
-- Next: SwiGLU
+- Next: GQA (Grouped Query Attention)
+
+---
+
+## Session 25 — 2026-04-23 — SwiGLU
+
+### What we covered
+- Implemented `FeedForwardSwiGLU` as a separate class alongside the existing `FeedForward`
+- SwiGLU: `W_down(W_gate(x) ⊙ SiLU(W_up(x)))` — 3 linear layers instead of 2, with gating
+- Added `use_swiglu` flag through the entire model chain
+- LoRA support for all 3 SwiGLU projections (W_gate, W_up, W_down)
+
+### Key learnings
+- SwiGLU replaces GELU FFN with a gated architecture: gate controls which features pass through
+- SiLU(x) = x * sigmoid(x), also called "swish" — hence Swi**GLU** (Swish-Gated Linear Unit)
+- 3 linear layers instead of 2, but gating makes FFN more expressive; empirically matches GELU with fewer total parameters
+- LLaMA uses `ffn_dim = int(2 * 4/3 * embed_dim)` to compensate for the extra gate projection; we keep `4 * embed_dim` for simplicity
+
+### Code written
+- `src/llm_from_scratch/model/base.py` — `FeedForwardSwiGLU` class with LoRA support, `use_swiglu` flag in `TransformerBlock`, `GPT`, all factory methods
+
+### PLAN.md items completed
+- [x] **SwiGLU** — Replace GELU FFN with SwiGLU activation
+
+### Open questions
+- Next: GQA (Grouped Query Attention)
