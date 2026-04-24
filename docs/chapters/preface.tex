@@ -14,6 +14,37 @@ We assume familiarity with basic linear algebra (matrix multiplication, dot prod
 and calculus (gradients, the chain rule). No prior experience with language models
 or transformers is required; we build every concept from scratch.
 
+\section*{Our Reference Model: GPT-2}
+
+Throughout this book, we focus on implementing a GPT-2--class language model.
+Released by OpenAI in 2019, GPT-2 is an ideal learning target for several
+reasons:
+
+\begin{itemize}
+    \item \textbf{Simplicity}: GPT-2 uses a clean, decoder-only transformer
+          architecture without the encoder--decoder complexity of the original
+          Transformer or the architectural additions of later models. Every
+          component---embeddings, attention, layer normalization, feed-forward
+          layers---can be understood and implemented in isolation.
+    \item \textbf{Pretrained weights}: OpenAI published trained GPT-2 models on
+          HuggingFace, so we can load real weights (Chapters~5--6) and verify
+          our implementation produces coherent text, without needing to train
+          from scratch on a GPU cluster.
+    \item \textbf{Scale}: At 124M parameters (GPT-2 Small), the model is small
+          enough to train and experiment with on a consumer GPU, yet large
+          enough to demonstrate the key engineering challenges of real LLMs.
+    \item \textbf{Foundation for modern models}: GPT-3, LLaMA, Mistral, and
+          most contemporary LLMs are direct descendants of the GPT-2
+          architecture. The modifications they introduce---RMSNorm, rotary
+          positional embeddings, grouped query attention, SwiGLU---are covered
+          in Chapter~7, building directly on the GPT-2 baseline.
+\end{itemize}
+
+When we refer to ``the model'' or ``our implementation'' without
+qualification, we mean GPT-2 Small (12 layers, 768-dimensional embeddings,
+12 attention heads). Larger GPT-2 variants (Medium, Large, XL) share the
+same architecture with different hyperparameters.
+
 \section*{Pseudocode Convention}
 
 Throughout this book, algorithms are presented in Python-like pseudocode with type
