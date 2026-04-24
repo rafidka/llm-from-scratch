@@ -1,57 +1,6 @@
 \documentclass[11pt,a4paper]{book}
 
-% ── Packages ──────────────────────────────────────────────────────────
-\usepackage[margin=1in]{geometry}
-\usepackage{amsmath,amssymb}
-\usepackage{alltt}
-\usepackage{booktabs}
-\usepackage{enumitem}
-\usepackage{hyperref}
-\usepackage{tikz}
-\usetikzlibrary{positioning,arrows.meta,fit,calc,decorations.pathreplacing}
-\usepackage{xcolor}
-\usepackage{tcolorbox}
-\tcbuselibrary{skins,breakable,listings}
-\usepackage{listings}
-
-% ── Colors ────────────────────────────────────────────────────────────
-\definecolor{accent}{HTML}{2E86AB}
-\definecolor{highlight}{HTML}{A23B72}
-\definecolor{darkbg}{HTML}{F5F5F5}
-\definecolor{questionbg}{HTML}{FFF3CD}
-\definecolor{pseudobg}{HTML}{E8F4FD}
-\definecolor{problembg}{HTML}{E8F8E8}
-
-% ── Listings style ────────────────────────────────────────────────────
-\lstdefinestyle{pystyle}{
-  language=Python,
-  basicstyle=\ttfamily\small,
-  keywordstyle=\bfseries\color{accent},
-  commentstyle=\itshape\color{gray},
-  stringstyle=\color{highlight},
-  showstringspaces=false,
-  columns=fullflexible,
-  breaklines=true,
-  morekeywords={as,with,self,True,False,None},
-}
-
-% ── tcolorbox styles ─────────────────────────────────────────────────
-\newtcolorbox{keyconcept}[1][]{%
-  colback=accent!8, colframe=accent!80!black,
-  fonttitle=\bfseries, title=Key Concept #1, breakable}
-
-\newtcolorbox{reviewquestion}[1][]{%
-  colback=questionbg, colframe=highlight!70!black,
-  fonttitle=\bfseries, title=Review Question #1, breakable}
-
-\newtcblisting{pseudocode}[1][]{%
-  colback=pseudobg, colframe=accent!50!black,
-  fonttitle=\bfseries\ttfamily, title=#1, breakable,
-  listing only, listing options={style=pystyle}}
-
-\newtcolorbox{problem}[1][]{%
-  colback=problembg, colframe=green!50!black,
-  fonttitle=\bfseries, title=Problem #1, breakable}
+\input{preamble}
 
 % ── Meta ──────────────────────────────────────────────────────────────
 \title{\Huge\textbf{Building an LLM from Scratch}\\[6pt]
@@ -59,12 +8,6 @@
 \author{OpenCode (Based on the work of Rafid)\\[4pt]
         \small Written with GLM-5.1}
 \date{\today}
-
-\hypersetup{
-  colorlinks=true,
-  linkcolor=accent,
-  urlcolor=accent,
-}
 
 \begin{document}
 \maketitle
