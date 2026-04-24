@@ -74,7 +74,7 @@ def simplified_self_attention(X: Tensor) -> Tensor:
   because there is no sequential dependency between them.
 \end{keyconcept}
 
-\section{Scaled Dot-Product Attention}
+\section{Scaled Dot-Product Attention\label{sec:scaled-dot-product}}
 
 Simplified self-attention has a problem: the similarity measure is fixed.
 The model cannot learn \emph{what} to attend to---it is stuck with raw dot
@@ -146,7 +146,7 @@ def scaled_dot_product_attention(Q: Tensor, K: Tensor, V: Tensor) -> Tensor:
     scores = Q @ K.transpose(-2, -1)  # [batch, seq_len, d_k] @ [batch, d_k, seq_len] -> [batch, seq_len, seq_len]
     scaled_scores = scores / math.sqrt(d_k)  # [batch, seq_len, seq_len]
     attn_weights = softmax(scaled_scores, dim=-1)  # [batch, seq_len, seq_len]
-    attn_weights = dropout(attn_weights, p=dropout_p, training=self.training)  # [batch, seq_len, seq_len]
+    attn_weights = dropout(attn_weights, p=dropout_p, training=is_training)  # is_training=False during inference
     output = attn_weights @ V  # [batch, seq_len, seq_len] @ [batch, seq_len, d_v] -> [batch, seq_len, d_v]
     return output
 \end{pseudocode}
@@ -324,7 +324,7 @@ same total dimensionality.
 
 The Q/K/V formulation can be understood through the lens of a \emph{soft
 dictionary}: a differentiable generalization of a hash table or database
-lookup. The database analogy from Section~2 applies here too, but now we can
+lookup. The database analogy from Section~\ref{sec:scaled-dot-product} applies here too, but now we can
 see how it plays out \emph{across layers} of a deep network.
 
 In a standard dictionary, the lookup returns exactly one value (hard match).
