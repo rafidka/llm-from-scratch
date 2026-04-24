@@ -1,123 +1,356 @@
 \chapter{Tokenization}
 
+Language models don't read raw text---they process sequences of integers.
+Tokenization is the step that converts a string like ``The cat sat on the
+mat'' into a list of numbers like $[464, 3797, 5832, 319, 262, 2603]$.
+Each integer is an index into an \emph{embedding table}, and the model
+learns to operate on these indices rather than characters or bytes.
+Choosing how to break text into tokens is one of the first and most
+consequential design decisions when building a language model.
+
+This chapter covers the full tokenization pipeline: the spectrum of
+approaches (character-level, word-level, subword), a simple
+whitespace tokenizer, the Byte-Pair Encoding algorithm used by GPT-2,
+and how to construct next-token prediction datasets from tokenized
+corpora.
+
 \section{The Tokenization Spectrum}
 
-Language models operate on sequences of integers, not raw text.
-\emph{Tokenization} is the bridge: it converts text into a sequence of
-token IDs that the model can process.
+Consider the sentence ``She walked quickly.'' The three main
+tokenization strategies produce very different outputs:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Strategy} & \textbf{Tokens} & \textbf{IDs (example)} \\
+\midrule
+Character-level & S, h, e, \textvisiblespace, w, a, l, k, e, d, \ldots & [33, 8, 5, 0, 29, 3, 14, 15, 5, 7, \ldots] \\
+Word-level & She, walked, quickly, . & [184, 4052, 2187, 12] \\
+Subword (BPE) & She, walk, ed, quickly, . & [184, 3082, 753, 2187, 12] \\
+\bottomrule
+\end{tabular}
+\end{center}
 
 \begin{keyconcept}
   There is a fundamental tradeoff in tokenizer design:
   \begin{itemize}
-    \item \textbf{Character-level}: tiny vocabulary ($\sim$256), very long
-          sequences, no semantic grouping.
-    \item \textbf{Word-level}: large vocabulary (potentially unbounded),
-          short sequences, but suffers from the OOV problem and vocabulary
-          explosion.
-    \item \textbf{Subword (BPE)}: strikes a balance---common words are
-          single tokens, rare words decompose into subwords. Most modern
-          LLMs use this.
+    \item \textbf{Character-level}: tiny vocabulary ($\sim$256 entries, one per
+          ASCII character). Produces very long sequences, making the model's
+          attention cost explode. No semantic grouping---the letter ``e'' in
+          ``the'' and ``believe'' carries no word-level meaning.
+    \item \textbf{Word-level}: short sequences, but the vocabulary is
+          unbounded (new words, typos, and morphological variants all need
+          entries). Out-of-vocabulary (OOV) words must be mapped to a single
+          \texttt{<|unk|>} token, losing information. A vocabulary of 500{,}000+
+          words is common for large corpora.
+    \item \textbf{Subword (BPE)}: strikes a balance. Common words stay whole
+          (``the'' $\rightarrow$ one token), while rare or unseen words decompose
+          into known subword units (``unbelievable'' $\rightarrow$
+          ``un'', ``believ'', ``able''). Vocabulary size is bounded
+          (typically 30k--100k), and every word can be represented. Most modern
+          LLMs use this approach.
   \end{itemize}
 \end{keyconcept}
 
 \section{SimpleTokenizer}
 
-The simplest approach: split by whitespace, build a vocabulary from the
-corpus, and map tokens to IDs.
+The simplest tokenizer splits text on whitespace and looks up each token
+in a vocabulary:
 
-\begin{pseudocode}[SimpleTokenizer: encode pseudocode]
-\textbf{Input:} text string \quad \textbf{Output:} list of integer IDs\\[3pt]
-tokens $\leftarrow$ \texttt{split(text)} by whitespace\\
-\textbf{for} each token in tokens:\\
-\quad \textbf{if} token \textbf{in} vocab:\\
-\quad\quad append \texttt{vocab[token]} to output\\
-\quad \textbf{else}:\\
-\quad\quad append \texttt{UNK\_ID} to output\\
-\textbf{return} output
+\begin{pseudocode}[SimpleTokenizer: encode]
+class SimpleTokenizer:
+    def __init__(self, vocab: dict[str, int]):
+        self.vocab = vocab                          # token -> ID
+        self.reverse_vocab = {v: k for k, v in vocab.items()}  # ID -> token
+        self.unk_id = vocab.get("<|unk|>", 0)
+        self.eos_id = vocab.get("<|eos|>", 1)
+
+    def encode(self, text: str) -> list[int]:
+        tokens = text.split()                      # split on whitespace
+        ids = []
+        for token in tokens:
+            ids.append(self.vocab.get(token, self.unk_id))
+        return ids                                 # e.g. [464, 3797, 5832]
 \end{pseudocode}
 
 \begin{keyconcept}
   Special tokens serve important roles:
-  \texttt{<|unk|>} handles out-of-vocabulary words;
+  \texttt{<|unk|>} replaces any word not in the vocabulary, giving the model
+  a way to represent unseen words rather than crashing;
   \texttt{<|eos|>} marks document boundaries so the model learns where
-  sequences end.
+  sequences end and a new context begins.
 \end{keyconcept}
 
 \section{Byte-Pair Encoding (BPE)}
 
-BPE iteratively merges the most frequent adjacent pair of symbols,
-building up from characters to longer subwords.
+Byte-Pair Encoding starts from characters and iteratively merges the most
+frequent adjacent pair, building up longer and longer subword tokens.
+The result is a vocabulary that grows from individual characters to
+common multi-character sequences, all driven by what the data demands.
+
+\subsection{BPE Training}
+
+Training proceeds in rounds. Each round, we count every adjacent pair
+across the entire corpus, pick the most frequent pair, merge it into a
+single token, and record the merge rule. The vocabulary grows by one
+entry per merge.
+
+\begin{keyconcept}[Worked Example: BPE Training]
+  Suppose our (tiny) corpus contains the word ``lowest'' with frequency 5
+  and the word ``low'' with frequency 2. We start by splitting each word
+  into characters:
+
+  \begin{center}
+  \begin{tabular}{lll}
+  \toprule
+  \textbf{Word} & \textbf{Freq} & \textbf{Character Split} \\
+  \midrule
+  low & 2 & l\;\, o\;\, w \\
+  lowest & 5 & l\;\, o\;\, w\;\, e\;\, s\;\, t \\
+  \bottomrule
+  \end{tabular}
+  \end{center}
+
+  \textbf{Round 1}: Count adjacent pairs weighted by frequency.
+  The pair (l, o) appears $2 + 5 = 7$ times; (o, w) appears $2 + 5 = 7$ times;
+  (w, e) appears 5 times; (e, s) appears 5 times; (s, t) appears 5 times.
+  Ties are broken arbitrarily---suppose we pick (l, o). We merge into ``lo'':
+
+  \begin{center}
+  \begin{tabular}{lll}
+  \toprule
+  \textbf{Word} & \textbf{Freq} & \textbf{After Merge} \\
+  \midrule
+  low & 2 & lo\;\, w \\
+  lowest & 5 & lo\;\, w\;\, e\;\, s\;\, t \\
+  \bottomrule
+  \end{tabular}
+  \end{center}
+
+  \textbf{Round 2}: Now (lo, w) appears 7 times, (w, e) appears 5 times,
+  (e, s) appears 5 times, (s, t) appears 5 times. Merge (lo, w) into
+  ``low'':
+
+  \begin{center}
+  \begin{tabular}{lll}
+  \toprule
+  \textbf{Word} & \textbf{Freq} & \textbf{After Merge} \\
+  \midrule
+  low & 2 & low \\
+  lowest & 5 & low\;\, e\;\, s\;\, t \\
+  \bottomrule
+  \end{tabular}
+  \end{center}
+
+  \textbf{Round 3}: (e, s) appears 5 times---merge into ``es'':
+  lowest $\rightarrow$ low\;\, es\;\, t.
+
+  Continuing this process, we accumulate merge rules: (l, o), (lo, w),
+  (e, s), \ldots\ The final vocabulary consists of all original characters
+  plus every merged token.
+\end{keyconcept}
 
 \begin{pseudocode}[BPE Training]
-\textbf{Input:} corpus, number of merges $N$\\[3pt]
-Pre-tokenize corpus into words\\
-Initialize each word as a tuple of its characters\\
-\textbf{for} $i = 1$ \textbf{to} $N$:\\
-\quad Count all adjacent pairs across all words (weighted by word frequency)\\
-\quad pair $\leftarrow$ most frequent pair\\
-\quad Record pair in merge list\\
-\quad Merge every occurrence of pair in all words\\
-\textbf{Vocabulary} $\leftarrow$ initial characters $\cup$ all merged tokens $\cup$ special tokens
+def train_bpe(corpus: str, num_merges: int) -> tuple[list[tuple[str, str]], dict[str, int]]:
+    word_freqs = pretokenize(corpus)                # {"lowest": 5, "low": 2, ...}
+    # Split each word into characters
+    splits: dict[str, list[str]] = {
+        word: list(word) for word in word_freqs     # "lowest" -> ["l", "o", "w", "e", "s", "t"]
+    }
+    merges: list[tuple[str, str]] = []
+    for i in range(num_merges):
+        pair_counts = count_pairs(splits, word_freqs) # all adjacent pairs
+        best_pair = max(pair_counts, key=pair_counts.get) # most frequent pair
+        merges.append(best_pair)
+        splits = merge_pair(splits, best_pair)      # replace (a, b) with "ab" everywhere
+    vocab = build_vocab(splits, merges)             # chars + merged tokens + special tokens
+    return merges, vocab
 \end{pseudocode}
 
+\subsection{BPE Encoding}
+
+Once the merge rules are learned, encoding new text is deterministic:
+split each word into characters, then replay the merge rules in order.
+
 \begin{pseudocode}[BPE Encoding]
-\textbf{Input:} text string \quad \textbf{Output:} list of integer IDs\\[3pt]
-Pre-tokenize text into words\\
-\textbf{for} each word:\\
-\quad Split word into characters\\
-\quad \textbf{for} each merge rule \textbf{in order}:\\
-\quad\quad Apply merge to the character tuple\\
-\quad Append resulting subwords to output\\
-Map subwords to IDs (unknown $\rightarrow$ UNK)\\
-\textbf{return} IDs
+def encode_bpe(text: str, merges: list[tuple[str, str]], vocab: dict[str, int]) -> list[int]:
+    words = pretokenize(text)                       # regex-based pre-tokenization
+    token_ids: list[int] = []
+    for word in words:
+        symbols = list(word)                        # split into characters
+        for (a, b) in merges:                        # replay merges in training order
+            symbols = merge_pair_in_list(symbols, a, b)
+        for symbol in symbols:
+            token_ids.append(vocab.get(symbol, vocab["<|unk|>"]))
+    return token_ids
 \end{pseudocode}
 
 \begin{keyconcept}
   \textbf{BPE key insight}: merge rules are ordered---encoding must
-  replay them in the \emph{same order} as training. The tokenizer
-  learns which merges are most useful from the data.
+  replay them in the \emph{same order} as training. If we merged (l, o)
+  before any other pair, then during encoding we must also apply that
+  merge first. If we applied merges out of order, we could get different
+  tokenizations and the model wouldn't recognize the resulting tokens.
 
-  GPT-2's tokenizer uses byte-level BPE with the regex
-  \texttt{r"(\textquestiondown ?[a-zA-Z]+| ?[0-9]+| ?[\textasciicircum\textbackslash s\textbackslash a-zA-Z0-9]+|\textbackslash s+)"}
-  to split text before applying BPE merges. Its vocabulary contains
-  50,257 tokens learned from billions of tokens of text.
+  GPT-2's tokenizer uses byte-level BPE. It first splits text with a
+  regex that separates contractions, numbers, and punctuation into
+  reasonable chunks, then applies BPE merges learned from a large corpus.
+  Its vocabulary contains 50,257 tokens.
 \end{keyconcept}
 
 \section{Next-Token Prediction Dataset}
 
 Language models are trained via \emph{next-token prediction}: given a
-sequence of tokens, predict the next one.
+sequence of tokens, predict the next one. To create training examples
+from a long tokenized corpus, we use a sliding window.
 
 \begin{pseudocode}[Sliding-Window Dataset]
-\textbf{Input:} tokenized corpus, max\_length, stride\\[3pt]
-\textbf{for} $i = 0$, stride, $2\times$stride, \ldots:\\
-\quad input  $\leftarrow$ tokens[$i$ : $i + \text{max\_length}$]\\
-\quad target $\leftarrow$ tokens[$i+1$ : $i + 1 + \text{max\_length}$]\\
-\quad yield (input, target)
+class SlidingWindowDataset:
+    def __init__(self, token_ids: list[int], max_length: int, stride: int):
+        self.token_ids = token_ids                  # full corpus as IDs
+        self.max_length = max_length                # context window size
+        self.stride = stride                        # step between windows
+
+    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
+        start = idx * self.stride
+        end = start + self.max_length
+        input_ids = torch.tensor(self.token_ids[start:end])       # [max_length]
+        target_ids = torch.tensor(self.token_ids[start+1:end+1])  # [max_length]
+        return input_ids, target_ids
+
+    def __len__(self) -> int:
+        return (len(self.token_ids) - self.max_length) // self.stride
 \end{pseudocode}
 
 \begin{keyconcept}
   The target is the input shifted by one position: if the input is
-  ``The cat sat'', the target is ``cat sat on''. The \textbf{stride}
-  controls overlap between windows. Smaller stride $=$ more training
-  examples but more redundancy. When
-  $\text{stride} = \text{max\_length}$, there is no overlap.
+  ``The cat sat'', the target is ``cat sat on''. This way, at each
+  position the model predicts the \emph{next} token given everything
+  before it.
+
+  The \textbf{stride} controls overlap between windows. Smaller stride
+  $=$ more training examples but more redundancy (adjacent windows share
+  most of their tokens). When $\text{stride} = \text{max\_length}$,
+  there is no overlap and each token appears in exactly one example.
 \end{keyconcept}
 
 \section*{Review Questions}
 
 \begin{reviewquestion}[1]
+  Why does character-level tokenization produce much longer sequences than
+  word-level tokenization? Estimate the approximate length ratio for a
+  typical English sentence.
+\end{reviewquestion}
+
+\begin{reviewquestion}[2]
   Why does word-level tokenization suffer from vocabulary explosion, and
   how does BPE address this?
 \end{reviewquestion}
 
-\begin{reviewquestion}[2]
-  In BPE encoding, why must merge rules be replayed in the same order as
-  during training? What would happen if you applied them in a different
-  order?
+\begin{reviewquestion}[3]
+  Give an example of a word that would be tokenized differently under
+  word-level vs.\ subword tokenization. Why does the subword approach
+  avoid the OOV problem?
 \end{reviewquestion}
 
-\begin{reviewquestion}[3]
-  How does the stride parameter in the sliding-window dataset affect both
-  the number of training examples and their redundancy?
+\begin{reviewquestion}[4]
+  In the SimpleTokenizer, what happens when a word is not in the
+  vocabulary? How does this compare to what happens with a BPE tokenizer
+  encountering a rare word?
 \end{reviewquestion}
+
+\begin{reviewquestion}[5]
+  What is the role of the \texttt{<|eos|>} token? Why would you insert it
+  between documents in a training corpus?
+\end{reviewquestion}
+
+\begin{reviewquestion}[6]
+  In BPE training, suppose the pair (e, r) is the most frequent across the
+  corpus. What happens after this pair is merged? Does it affect the
+  frequency of other pairs?
+\end{reviewquestion}
+
+\begin{reviewquestion}[7]
+  In the worked example above, what would the tokens for ``lowest'' look
+  like after 4 rounds of merging?
+\end{reviewquestion}
+
+\begin{reviewquestion}[8]
+  Why must BPE merge rules be replayed in the same order during encoding
+  as they were learned during training? Construct a small example where
+  applying merges in a different order produces a different tokenization.
+\end{reviewquestion}
+
+\begin{reviewquestion}[9]
+  How does the stride parameter in the sliding-window dataset affect both
+  the number of training examples and their redundancy? What are the
+  tradeoffs of using a very small stride vs.\ setting stride equal to
+  max\_length?
+\end{reviewquestion}
+
+\begin{reviewquestion}[10]
+  GPT-2 uses byte-level BPE. What does ``byte-level'' mean, and why does
+  it guarantee that any input string (including emojis, multilingual text,
+  etc.) can be tokenized without an \texttt{<|unk|>} token?
+\end{reviewquestion}
+
+\begin{reviewquestion}[11]
+  Suppose you have a corpus with the words ``running'' (freq 10) and
+  ``runner'' (freq 8). After the first BPE merge creates the token ``run'',
+  what does the tokenization of ``running'' and ``runner'' look like?
+\end{reviewquestion}
+
+\begin{reviewquestion}[12]
+  Why is pre-tokenization (splitting text into words with a regex before
+  BPE) useful? What would happen if you applied BPE directly on raw
+  character sequences without pre-tokenization?
+\end{reviewquestion}
+
+\section*{Problems}
+
+\begin{problem}[1]
+  Implement a \texttt{SimpleTokenizer} class with \texttt{encode} and
+  \texttt{decode} methods. Your tokenizer should split on whitespace,
+  maintain a vocabulary dictionary, and handle unknown tokens with a
+  special \texttt{<|unk|>} token.
+\end{problem}
+
+\begin{problem}[2]
+  Implement BPE training from scratch. Given a small corpus (e.g., a few
+  paragraphs of text), write a function that:
+  \begin{enumerate}
+    \item Pre-tokenizes the corpus into words with frequency counts
+    \item Splits each word into characters
+    \item Iteratively finds and merges the most frequent pair
+    \item Returns the list of merge rules
+  \end{enumerate}
+  Test your implementation on the example from this chapter and verify
+  that you get the same merge sequence.
+\end{problem}
+
+\begin{problem}[3]
+  Implement the \texttt{encode} method for BPE using your trained merge
+  rules. For each word: split into characters, then replay the merge
+  rules in order. Ensure that your encoding reproduces the same
+  tokenization as the training process. Test it by encoding ``lowest''
+  and ``low'' and checking that the results match what you observed
+  during training.
+\end{problem}
+
+\begin{problem}[4]
+  Implement the \texttt{SlidingWindowDataset} class. Use a real
+  corpus (e.g., a public domain book from Project Gutenberg), tokenize
+  it with your BPE tokenizer, and create the dataset with
+  \texttt{max\_length=256} and \texttt{stride=128}. Print out the first
+  3 examples (both input and target) and verify that the target is the
+  input shifted by one position.
+\end{problem}
+
+\begin{problem}[5]
+  Investigate the effect of stride on dataset size and redundancy. Using
+  your \texttt{SlidingWindowDataset} with \texttt{max\_length=256},
+  compute the number of examples for stride values of 32, 64, 128, and
+  256. For each setting, also estimate the percentage of token overlap
+  between consecutive examples. What are the memory and training
+  implications of each setting?
+\end{problem}
