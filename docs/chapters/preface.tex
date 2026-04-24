@@ -1,0 +1,45 @@
+\chapter*{Preface}
+
+This book is a hands-on guide to building a large language model from the ground up.
+It covers every major component---from tokenizing raw text, through attention and the
+transformer architecture, to pretraining, loading pretrained weights, fine-tuning,
+and modern architectural innovations---with enough depth that you can implement each
+piece yourself.
+
+\section*{Who This Book Is For}
+
+You should be comfortable writing Python and have some experience with PyTorch,
+including tensors, automatic differentiation, and \texttt{nn.Module}.
+We assume familiarity with basic linear algebra (matrix multiplication, dot products)
+and calculus (gradients, the chain rule). No prior experience with language models
+or transformers is required; we build every concept from scratch.
+
+\section*{Pseudocode Convention}
+
+Throughout this book, algorithms are presented in Python-like pseudocode with type
+hints and tensor shape annotations. For example:
+
+\begin{pseudocode}[Example: Shape Annotations]
+def some_function(x: Tensor) -> Tensor:  # x: [batch, seq_len, embed_dim]
+    y = linear(x)  # [batch, seq_len, out_dim]
+    return y        # [batch, seq_len, out_dim]
+\end{pseudocode}
+
+Shape annotations in comments track how tensor dimensions change through each
+operation. Where abbreviations are necessary for layout reasons, a legend is
+provided at the top of the code block explaining each abbreviation.
+
+\section*{Chapter Overview}
+
+\begin{enumerate}
+    \item \textbf{Tokenization} --- Turning raw text into sequences of integers
+    \item \textbf{Attention} --- The mechanism that lets tokens interact with each other
+    \item \textbf{The GPT Architecture} --- Assembling the full transformer decoder
+    \item \textbf{Pretraining} --- Training the model with next-token prediction
+    \item \textbf{Loading Pretrained Weights} --- Reusing weights from HuggingFace
+    \item \textbf{Fine-Tuning} --- Adapting a pretrained model for classification and instruction following
+    \item \textbf{Modern Architecture Deep Dives} --- RMSNorm, RoPE, SwiGLU, and GQA
+\end{enumerate}
+
+Each chapter ends with review questions to test your understanding and hands-on
+coding problems to strengthen your implementation skills.

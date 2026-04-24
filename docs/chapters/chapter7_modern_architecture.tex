@@ -1,40 +1,123 @@
 \chapter{Modern Architecture Deep Dives}
 
-\section{RMSNorm}
+The original GPT-2 architecture, introduced in 2019, established a template
+that still shapes transformer design today: embedding lookups, multi-head
+self-attention, LayerNorm, GELU feed-forward networks, and learned absolute
+positional embeddings. Yet every component in that template has since been
+reconsidered. Modern large language models---LLaMA, Mistral, Gemma, and
+others---replace each piece with something better: LayerNorm becomes RMSNorm,
+absolute positional embeddings become Rotary Positional Embeddings (RoPE),
+GELU becomes SwiGLU, and standard Multi-Head Attention becomes Grouped Query
+Attention (GQA).
 
-RMSNorm simplifies LayerNorm by removing mean subtraction and bias:
+Why? Three problems motivate every change in this chapter:
 
-\begin{align*}
-  \textbf{LayerNorm:} \quad & \hat{x}_i = \frac{x_i - \mu}{\sqrt{\sigma^2 + \epsilon}}, \quad y_i = \gamma \hat{x}_i + \beta \\[6pt]
-  \textbf{RMSNorm:} \quad & \hat{x}_i = \frac{x_i}{\sqrt{\frac{1}{d}\sum_{j=1}^{d} x_j^2 + \epsilon}}, \quad y_i = \gamma \hat{x}_i
-\end{align*}
-
-Key differences:
 \begin{itemize}
-  \item RMSNorm removes \textbf{mean subtraction}: it only rescales, not
-        recenters
-  \item RMSNorm has \textbf{no bias} parameter ($\beta$), only a gain
-        $\gamma$
-  \item In practice, negligible speed difference---normalization is a
-        tiny fraction of total compute
+  \item \textbf{Training stability.} LayerNorm's mean subtraction introduces
+        a shift that can destabilize deep networks; RMSNorm removes it without
+        hurting quality.
+  \item \textbf{Context length.} Absolute positional embeddings give the model
+        no way to generalize beyond the sequence lengths seen during training.
+        RoPE encodes position through rotations, enabling extrapolation and
+        making relative position a natural byproduct.
+  \item \textbf{Inference efficiency.} During autoregressive generation, the
+        KV cache grows linearly with sequence length and number of heads. GQA
+        reduces the number of KV heads, cutting memory and bandwidth without
+        significant quality loss.
 \end{itemize}
 
+This chapter dives into each replacement: what it changes, why it works, and
+how to implement it. By the end, you will understand the full set of
+architectural upgrades that separates a 2019-era GPT-2 from a 2024-era
+open-weight LLM.
+
+\section{RMSNorm}
+
+LayerNorm normalizes each vector $\mathbf{x} \in \mathbb{R}^d$ by first
+subtracting the mean and then dividing by the standard deviation:
+
+\begin{align*}
+  \mu &= \frac{1}{d}\sum_{j=1}^{d} x_j, \qquad
+  \sigma^2 = \frac{1}{d}\sum_{j=1}^{d}(x_j - \mu)^2 \\[6pt]
+  \hat{x}_i &= \frac{x_i - \mu}{\sqrt{\sigma^2 + \epsilon}}, \qquad
+  y_i = \gamma\,\hat{x}_i + \beta
+\end{align*}
+
+RMSNorm (Root Mean Square Layer Normalization) simplifies this in two ways.
+First, it removes the mean subtraction---it normalizes by the root mean square
+alone. Second, it removes the bias $\beta$, keeping only a learnable gain
+$\gamma$:
+
+\begin{align*}
+  \textbf{RMSNorm:} \quad \hat{x}_i = \frac{x_i}{\sqrt{\frac{1}{d}\sum_{j=1}^{d} x_j^2 + \epsilon}}, \quad y_i = \gamma\,\hat{x}_i
+\end{align*}
+
 \begin{keyconcept}
-  \textbf{Float32 upcasting}: Both LayerNorm and RMSNorm must upcast to
-  float32 before computing mean/variance/RMS. Low-precision types (bf16,
-  fp16) can overflow or lose precision in these reduction operations.
-  After computing the normalization in float32, the result is cast back
-  to the original dtype before the affine transform.
+  \textbf{Why does removing mean subtraction work?} In transformers,
+  normalizations are applied \emph{before} each sublayer (pre-norm). The
+  residual path $x + f(\text{Norm}(x))$ already preserves the mean of $x$,
+  so recentering inside the normalization is redundant. RMSNorm rescales
+  the magnitude---the only part that grows unstably in deep
+  networks---without shifting the center, and the learnable $\gamma$ provides
+  all the expressivity needed.
+
+  \textbf{Why no bias?} With no mean subtraction, the output is
+  zero-centered by construction (the normalization itself centers around
+  zero). A bias $\beta$ would merely re-introduce a shift that the
+  normalization just removed, making it redundant.
 \end{keyconcept}
+
+\begin{keyconcept}
+  \textbf{Float32 upcasting}: Both LayerNorm and RMSNorm must upcast their
+  inputs to float32 before computing the reduction (mean, variance, or RMS).
+  Low-precision types like bf16 and fp16 can overflow or lose precision in
+  these reductions. After computing the normalization in float32, the result
+  is cast back to the original dtype before the affine transform ($\gamma$),
+  which stays in the original dtype.
+\end{keyconcept}
+
+\begin{pseudocode}[RMSNorm Forward Pass]
+import torch
+
+def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    # x: [batch, seq_len, embed_dim]
+    # weight: [embed_dim]  (gamma)
+    # Compute in float32 for numerical stability
+    x_float = x.float()
+    # Root mean square: sqrt(mean(x^2) + eps)
+    rms = torch.sqrt(torch.mean(x_float ** 2, dim=-1, keepdim=True) + eps)
+    # Normalize and cast back to original dtype
+    x_normed = (x_float / rms).type_as(x)
+    # Apply learnable gain (no bias)
+    return weight * x_normed  # [batch, seq_len, embed_dim]
+\end{pseudocode}
 
 \section{RoPE (Rotary Positional Embeddings)}
 
-RoPE encodes position by \emph{rotating} pairs of dimensions in the
-query and key vectors, rather than adding positional embeddings.
+GPT-2 uses \emph{learned absolute positional embeddings}---a lookup table that
+adds a position-dependent vector to each token embedding. This has a fundamental
+limitation: the model can only handle positions up to the maximum it was trained
+on. If you train with 1{,}024 positions, position 1{,}025 has no embedding and
+the model has no way to reason about it.
 
-\subsection{The Key Idea}
+Rotary Positional Embeddings (RoPE) solve this by encoding position through
+\emph{rotations} in the embedding space. Instead of adding a vector, RoPE
+\emph{rotates} pairs of dimensions in the query and key tensors by an angle
+that depends on the position. This gives two crucial properties:
+\begin{enumerate}
+  \item The dot product between a query at position $m$ and a key at position
+        $n$ depends only on the \emph{relative distance} $m - n$, not the
+        absolute positions. This is called \emph{relative position encoding}.
+  \item Because rotations are defined by angle (a continuous value), RoPE can
+        in principle extrapolate to positions beyond the training range---there
+        is no hard cutoff.
+\end{enumerate}
 
-For each pair of dimensions $(2i, 2i+1)$ at position $m$:
+\subsection{The Rotation Operation}
+
+RoPE operates on pairs of dimensions $(2i, 2i+1)$ of the query and key
+vectors. For a vector $\mathbf{q} \in \mathbb{R}^d$ at position $m$, each
+pair is rotated by an angle $m\theta_i$:
 
 \[
   \begin{bmatrix} q_{2i}' \\ q_{2i+1}' \end{bmatrix}
@@ -43,50 +126,203 @@ For each pair of dimensions $(2i, 2i+1)$ at position $m$:
   \begin{bmatrix} q_{2i} \\ q_{2i+1} \end{bmatrix}
 \]
 
-where $\theta_i = \frac{1}{\text{base}^{2i/d}}$ (base = 10000 by
-default).
+where $\theta_i = \text{base}^{-2i/d}$ (base $= 10{,}000$ by default). This
+is a standard 2D rotation matrix applied independently to each pair of
+coordinates. Different pairs use different rotation frequencies: low-index
+pairs (near the start of the vector) rotate faster (large $\theta_i$), while
+high-index pairs rotate slower (small $\theta_i$). The same rotation is
+applied to both queries and keys, but with their respective positions.
 
-This is a 2D rotation by angle $m\theta_i$.
+\subsection{Why RoPE Gives Relative Position Encoding}
+
+Consider what happens when you compute the dot product between a rotated
+query at position $m$ and a rotated key at position $n$. For a single pair
+of dimensions with index $i$:
+
+\[
+  q_{2i}' \cdot k_{2i}' + q_{2i+1}' \cdot k_{2i+1}'
+\]
+
+Substituting the rotated values:
+
+\begin{align*}
+  & \bigl(q_{2i}\cos m\theta_i - q_{2i+1}\sin m\theta_i\bigr)
+    \bigl(k_{2i}\cos n\theta_i - k_{2i+1}\sin n\theta_i\bigr) \\
+  & + \bigl(q_{2i}\sin m\theta_i + q_{2i+1}\cos m\theta_i\bigr)
+    \bigl(k_{2i}\sin n\theta_i + k_{2i+1}\cos n\theta_i\bigr)
+\end{align*}
+
+Expanding and collecting terms, this simplifies to:
+
+\[
+  (q_{2i}k_{2i} + q_{2i+1}k_{2i+1})\cos\bigl((m-n)\theta_i\bigr)
+  + (q_{2i}k_{2i+1} - q_{2i+1}k_{2i})\sin\bigl((m-n)\theta_i\bigr)
+\]
+
+The key insight: the result depends on $m$ and $n$ \textbf{only through their
+difference} $(m - n)$. The absolute positions have cancelled out. This is a
+direct consequence of the rotation group structure---applying rotation $m$ and
+then the inverse of rotation $n$ yields rotation $m - n$.
+
+\begin{keyconcept}
+  \textbf{Critical properties of RoPE}:
+  \begin{itemize}
+    \item The dot product $q_m^\top k_n$ depends \emph{only on the relative
+          distance} $(m - n)$, not on absolute positions $m$ and $n$
+          individually.
+    \item RoPE is applied \emph{only to Q and K, never to V}. Position
+          information enters exclusively through attention scores.
+    \item Different dimensions capture different position frequencies:
+          low-index pairs are sensitive to fine-grained (nearby) position
+          differences, while high-index pairs respond to long-range patterns.
+  \end{itemize}
+\end{keyconcept}
 
 \subsection{Efficient Implementation: Rotate-and-Interleave}
 
-Instead of handling pairs explicitly, we use the identity:
+Handling pairs of dimensions explicitly is cumbersome. The standard
+implementation uses an equivalent formulation that operates on the full
+vector at once:
 
 \[
-  q' = q \odot \cos(m\boldsymbol{\theta}) + \text{rotate\_half}(q) \odot \sin(m\boldsymbol{\theta})
+  \mathbf{q}' = \mathbf{q} \odot \cos(m\boldsymbol{\theta}) + \text{rotate\_half}(\mathbf{q}) \odot \sin(m\boldsymbol{\theta})
 \]
 
-where $\text{rotate\_half}$ constructs $(-q_{2i+1}, q_{2i})$ for each
-pair, then interleaves. In code:
+where $\text{rotate\_half}$ splits the vector into pairs
+$(q_{2i}, q_{2i+1})$, constructs $(-q_{2i+1}, q_{2i})$ for each pair, and
+interleaves the result back into a single vector. This produces exactly the
+same result as the explicit rotation but is far more efficient.
 
-\begin{pseudocode}[Apply Rotary Embedding]
-Reshape $x$ to $[\ldots, d/2, 2]$ \hfill\textrm{\small (pair up dimensions)}\\
-$x_{\text{rot}} \leftarrow$ stack $(-x[\ldots, 1], x[\ldots, 0])$ along last dim\\
-$x_{\text{rot}} \leftarrow$ flatten $x_{\text{rot}}$ \hfill\textrm{\small (interleave back)}\\
-\textbf{return} $x \odot \cos + x_{\text{rot}} \odot \sin$
+\begin{pseudocode}[Applying Rotary Positional Embeddings]
+import torch
+
+def apply_rotary_emb(
+    x: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+) -> torch.Tensor:
+    # x:   [batch, num_heads, seq_len, head_dim]
+    # cos: [batch, 1, seq_len, head_dim]  (broadcast over heads)
+    # sin: [batch, 1, seq_len, head_dim]
+
+    # Pair up dimensions: reshape to [..., head_dim/2, 2]
+    x_pairs = x.float().reshape(*x.shape[:-1], -1, 2)
+    # rotate_half: (q_2i, q_{2i+1}) -> (-q_{2i+1}, q_2i)
+    x_rotated = torch.stack((-x_pairs[..., 1], x_pairs[..., 0]), dim=-1)
+    x_rotated = x_rotated.reshape_as(x)
+    # Apply rotation: q' = q * cos + rotate_half(q) * sin
+    output = x * cos + x_rotated * sin
+    return output.type_as(x)  # [batch, num_heads, seq_len, head_dim]
 \end{pseudocode}
 
-\begin{keyconcept}
-  \textbf{Critical property}: With RoPE, the dot product
-  $q_m^\top k_n$ depends \emph{only on the relative distance} $(m - n)$,
-  not on absolute positions. This is because the rotation angle for $q$
-  at position $m$ minus the rotation angle for $k$ at position $n$ equals
-  the angle for relative position $(m-n)$.
+\begin{pseudocode}[Computing Rotary Frequencies]
+import torch
 
-  \textbf{RoPE is applied only to Q and K, never to V}. Position
-  information enters exclusively through attention scores.
-\end{keyconcept}
+def precompute_rope_freqs(
+    head_dim: int,
+    max_seq_len: int,
+    base: float = 10000.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    # theta_i = base^(-2i/d) for i = 0, 1, ..., head_dim/2 - 1
+    freqs = 1.0 / (base ** (torch.arange(0, head_dim, 2).float() / head_dim))
+    # Position indices: [0, 1, ..., max_seq_len - 1]
+    positions = torch.arange(max_seq_len).float()
+    # Angle for each (position, dimension_pair): m * theta_i
+    angles = torch.outer(positions, freqs)  # [max_seq_len, head_dim/2]
+    # Duplicate to match head_dim (each pair shares one angle)
+    angles = torch.cat([angles, angles], dim=-1)  # [max_seq_len, head_dim]
+    cos = angles.cos()  # [max_seq_len, head_dim]
+    sin = angles.sin()  # [max_seq_len, head_dim]
+    return cos, sin
+\end{pseudocode}
 
 \section{SwiGLU}
 
-SwiGLU replaces the standard GELU FFN with a gated architecture:
+The feed-forward network (FFN) in the original transformer uses two linear
+projections with a GELU activation in between:
 
-\begin{align*}
-  \textbf{GELU FFN:} & \quad \text{FFN}(x) = W_2\!\left(\text{GELU}(W_1 x)\right) \\[4pt]
-  \textbf{SwiGLU:} & \quad \text{FFN}(x) = W_{\text{down}}\!\left(W_{\text{gate}}(x) \odot \text{SiLU}(W_{\text{up}}(x))\right)
-\end{align*}
+\[
+  \text{FFN}(x) = W_2\!\left(\text{GELU}(W_1 x + b_1)\right) + b_2
+\]
 
-where $\text{SiLU}(x) = x \cdot \sigma(x)$ (also called ``swish'').
+This is a simple expansion--activation--contraction pipeline: the input is
+projected up to a higher dimension (typically $4\times$ the embedding
+dimension), passed through a smooth nonlinearity, and projected back down.
+
+SwiGLU replaces this with a \emph{gated} architecture that uses three linear
+projections and a multiplicative gate:
+
+\[
+  \text{FFN}(x) = W_{\text{down}}\!\left(W_{\text{gate}}(x) \odot \text{SiLU}(W_{\text{up}}(x))\right)
+\]
+
+where $\text{SiLU}(x) = x \cdot \sigma(x)$ is the Sigmoid Linear Unit (also
+called ``swish''), and $\sigma(x) = \frac{1}{1 + e^{-x}}$ is the sigmoid
+function.
+
+\subsection{Understanding the Gating Mechanism}
+
+The key innovation is the \emph{gate}: $W_{\text{gate}}(x)$ produces a value
+that is multiplied element-wise with the SiLU-activated $W_{\text{up}}(x)$.
+When $\text{SiLU}(W_{\text{up}}(x)) \approx 0$, the gate effectively
+``closes''---that path is silenced. When $\text{SiLU}(W_{\text{up}}(x)) \approx
+W_{\text{up}}(x)$ (for large positive inputs), the gate is ``open'' and
+information flows through freely.
+
+This is qualitatively different from GELU: the gate provides a data-dependent
+on/off switch, allowing the network to selectively route information. GELU,
+by contrast, is a single nonlinearity---it modulates but never fully blocks
+a path (GELU's output is zero only at $-\infty$).
+
+\subsection{SiLU vs.\ GELU}
+
+Both functions are smooth, monotone approximations to ReLU, but they differ
+in detail:
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+ & \textbf{GELU} & \textbf{SiLU} \\
+\midrule
+Formula & $x \cdot \Phi(x)$ & $x \cdot \sigma(x)$ \\
+Approximation & Gaussian CDF & Logistic sigmoid \\
+At $x = 0$ & $\approx 0$ & $= 0.5$ \\
+As $x \to -\infty$ & $\to 0$ & $\to 0$ \\
+As $x \to +\infty$ & $= x$ & $= x$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+SiLU is cheaper to compute (sigmoid is a single exp, while GELU requires an
+approximation involving tanh). In the SwiGLU context, this matters because
+SiLU is applied to one of the two projections in every forward pass.
+
+\subsection{Dimension Calculation and Parameter Budget}
+
+The standard FFN expands from $d_{\text{model}}$ to $d_{\text{ff}}$ and back:
+
+\[
+  \text{Standard FFN}: \quad d_{\text{ff}} = 4\,d_{\text{model}}, \quad
+  \text{params} = 2 \times d_{\text{model}} \times d_{\text{ff}} = 8\,d_{\text{model}}^2
+\]
+
+SwiGLU uses three projections. If we kept $d_{\text{ff}} = 4\,d_{\text{model}}$,
+the parameter count would be:
+
+\[
+  \text{SwiGLU (naive)}: \quad 3 \times d_{\text{model}} \times d_{\text{ff}} = 12\,d_{\text{model}}^2
+\]
+
+That is $50\%$ more parameters than the standard FFN. To match the parameter
+budget, LLaMA sets:
+
+\[
+  d_{\text{ff}} = \frac{2}{3} \times 4\,d_{\text{model}} = \frac{8}{3}\,d_{\text{model}}
+\]
+
+so the total becomes $3 \times d_{\text{model}} \times \frac{8}{3}\,d_{\text{model}}
+= 8\,d_{\text{model}}^2$, matching the standard FFN. For a model with
+$d_{\text{model}} = 4096$: $d_{\text{ff}} = 10923$ (rounded from $10922.67$).
 
 \begin{keyconcept}
   \textbf{Key differences from standard FFN}:
@@ -99,18 +335,51 @@ where $\text{SiLU}(x) = x \cdot \sigma(x)$ (also called ``swish'').
     \item Despite having more parameters per layer, SwiGLU is
           empirically more parameter-efficient---it matches or exceeds
           GELU FFN quality with fewer total parameters
+    \item The FFN hidden dimension is adjusted from $4d_{\text{model}}$ to
+          $\frac{8}{3}d_{\text{model}}$ (for LLaMA) to keep the parameter
+          count on par with standard FFN
   \end{itemize}
-
-  LLaMA compensates for the extra projection by using
-  $d_{\text{ff}} = \frac{2}{3} \cdot 4d_{\text{model}}$ instead of
-  $4d_{\text{model}}$; our implementation keeps $4d_{\text{model}}$
-  for simplicity.
 \end{keyconcept}
+
+\begin{pseudocode}[SwiGLU Forward Pass]
+import torch
+import torch.nn as nn
+
+class SwiGLUFFN(nn.Module):
+    def __init__(self, embed_dim: int, hidden_dim: int):
+        super().__init__()
+        self.w_gate = nn.Linear(embed_dim, hidden_dim, bias=False)
+        self.w_up   = nn.Linear(embed_dim, hidden_dim, bias=False)
+        self.w_down  = nn.Linear(hidden_dim, embed_dim, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [batch, seq_len, embed_dim]
+        # Gated activation: gate * SiLU(up_proj)
+        gate = self.w_gate(x)                  # [batch, seq_len, hidden_dim]
+        up   = self.w_up(x)                    # [batch, seq_len, hidden_dim]
+        activated = gate * torch.nn.functional.silu(up)
+        # Project back down
+        return self.w_down(activated)           # [batch, seq_len, embed_dim]
+\end{pseudocode}
 
 \section{\texorpdfstring{GQA}{GQA} (Grouped Query Attention)}
 
-GQA reduces the KV cache by sharing KV heads across groups of query
-heads:
+During autoregressive generation, the model must store and reload the key and
+value tensors for all previous positions at every step. This \emph{KV cache}
+is the primary memory bottleneck at inference time. For a model with $h$
+attention heads, head dimension $d_k$, and sequence length $s$, the KV cache
+for a single layer is:
+
+\[
+  \text{KV cache size} = 2 \times h \times s \times d_k \times \text{sizeof(dtype)}
+\]
+
+For LLaMA-2 70B ($h = 64$, $d_k = 128$, dtype = fp16) at sequence length
+4{,}096, that is $2 \times 64 \times 4096 \times 128 \times 2 = 128$ MB per
+layer, and $\sim$3.5 GB for all 80 layers. Grouped Query Attention (GQA)
+reduces this by sharing KV heads across groups of query heads.
+
+\subsection{MHA vs GQA vs MQA}
 
 \begin{center}
 \begin{tikzpicture}[
@@ -164,22 +433,96 @@ KV cache savings & None & $\times\, h_{\text{kv}}/h$ & $\times\, 1/h$ \\
 \end{tabular}
 \end{center}
 
+In standard Multi-Head Attention (MHA), every query head has its own key and
+value head. Multi-Query Attention (MQA) takes this to the opposite extreme:
+a single KV head is shared by all query heads. GQA sits in between---query
+heads are divided into $g$ groups, and each group shares one KV head. The
+group size is $g = h / h_{\text{kv}}$. When $h_{\text{kv}} = h$, GQA reduces
+to MHA; when $h_{\text{kv}} = 1$, it reduces to MQA.
+
+Empirically, GQA with a moderate number of KV heads (e.g., 8 KV heads for 32
+query heads in LLaMA-2) retains nearly all of MHA's quality while cutting KV
+cache size and memory bandwidth by $4\times$. MQA can degrade quality,
+especially on tasks requiring fine-grained attention distinctions.
+
+\subsection{GQA Forward Pass}
+
+The GQA forward pass has two stages: first, compute keys and values with the
+smaller projection matrices (producing only $h_{\text{kv}}$ heads), then
+expand them to match the number of query heads. The expansion is done by
+\texttt{repeat\_interleave}, which repeats each KV head $g$ times along the
+head dimension so that every query head in a group sees the same KV head.
+
+\begin{pseudocode}[GQA Forward Pass]
+import torch
+import torch.nn as nn
+import math
+
+class GroupedQueryAttention(nn.Module):
+    def __init__(self, embed_dim: int, num_heads: int, num_kv_heads: int):
+        super().__init__()
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
+        self.head_dim = embed_dim // num_heads
+        self.group_size = num_heads // num_kv_heads
+
+        self.w_q = nn.Linear(embed_dim, num_heads * self.head_dim, bias=False)
+        self.w_k = nn.Linear(embed_dim, num_kv_heads * self.head_dim, bias=False)
+        self.w_v = nn.Linear(embed_dim, num_kv_heads * self.head_dim, bias=False)
+        self.w_o = nn.Linear(num_heads * self.head_dim, embed_dim, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch, seq_len, embed_dim = x.shape
+
+        # Project to queries, keys, values
+        q = self.w_q(x)  # [batch, seq_len, num_heads * head_dim]
+        k = self.w_k(x)  # [batch, seq_len, num_kv_heads * head_dim]
+        v = self.w_v(x)  # [batch, seq_len, num_kv_heads * head_dim]
+
+        # Reshape into heads
+        q = q.view(batch, seq_len, self.num_heads, self.head_dim)
+        k = k.view(batch, seq_len, self.num_kv_heads, self.head_dim)
+        v = v.view(batch, seq_len, self.num_kv_heads, self.head_dim)
+
+        # Transpose to [batch, heads, seq_len, head_dim]
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        # Expand KV heads: [batch, num_kv_heads, seq_len, head_dim]
+        #           -> [batch, num_heads, seq_len, head_dim]
+        k = k.repeat_interleave(self.group_size, dim=1)
+        v = v.repeat_interleave(self.group_size, dim=1)
+
+        # Apply rotary embeddings to Q and K (not V!)
+        # q = apply_rotary_emb(q, cos, sin)
+        # k = apply_rotary_emb(k, cos, sin)
+
+        # Scaled dot-product attention
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        # Apply causal mask (set future positions to -inf)
+        attn_weights = torch.softmax(scores, dim=-1)
+        attn_output = torch.matmul(attn_weights, v)
+
+        # Reshape and project back
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.view(batch, seq_len, embed_dim)
+        return self.w_o(attn_output)  # [batch, seq_len, embed_dim]
+\end{pseudocode}
+
 \begin{keyconcept}
-  \textbf{Implementation}: After computing K and V with the smaller
-  $W_K$ and $W_V$ matrices ($d_{\text{model}} \rightarrow h_{\text{kv}}
-  \cdot d_k$), we expand them using
-  \texttt{repeat\_interleave} to match the number of query heads:
+  \textbf{Why apply RoPE after KV expansion?} RoPE must be applied after the
+  KV heads are expanded to match the query heads. If applied before expansion,
+  each KV head would be rotated only once, and the \texttt{repeat\_interleave}
+  would copy the same rotated head to all query heads in the group. While this
+  is mathematically equivalent (since all query heads in a group share the same
+  KV head and thus the same rotation), applying RoPE after expansion avoids
+  subtle numerical issues and is the convention used in most implementations.
 
-  \begin{enumerate}
-    \item Compute K, V with reduced projection: $[b, s, h_{\text{kv}} \cdot d_k]$
-    \item Reshape: $[b, s, h_{\text{kv}}, d_k]$
-    \item Transpose: $[b, h_{\text{kv}}, s, d_k]$
-    \item Expand: $[b, h, s, d_k]$ via \texttt{repeat\_interleave}
-  \end{enumerate}
-
-  RoPE is applied \emph{after} KV expansion to avoid subtle numerical
-  issues. The special cases: $h_{\text{kv}} = h$ gives standard MHA,
-  $h_{\text{kv}} = 1$ gives Multi-Query Attention (MQA).
+  \textbf{Degenerate cases}: When $h_{\text{kv}} = h$, GQA reduces to
+  standard MHA with no expansion needed. When $h_{\text{kv}} = 1$, it
+  produces Multi-Query Attention (MQA) where a single KV head is shared by
+  all query heads.
 \end{keyconcept}
 
 \section*{Review Questions}
@@ -191,13 +534,121 @@ KV cache savings & None & $\times\, h_{\text{kv}}/h$ & $\times\, 1/h$ \\
 \end{reviewquestion}
 
 \begin{reviewquestion}[2]
-  Prove that with RoPE, the dot product $q_m^\top k_n$ depends only on
-  the relative position $(m - n)$, not on absolute positions $m$ and $n$
-  individually. (Hint: use the 2D rotation formulation.)
+  Both LayerNorm and RMSNorm upcast to float32 for the reduction
+  computation. Explain why this is necessary and what could go wrong if
+  the computation stayed in bf16 or fp16.
 \end{reviewquestion}
 
 \begin{reviewquestion}[3]
-  Consider a model with 32 query heads and 4 KV heads using GQA.
-  During autoregressive generation, how much smaller is the KV cache
-  compared to standard MHA? At what cost?
+  Prove that with RoPE, the dot product $q_m^\top k_n$ depends only on
+  the relative position $(m - n)$, not on absolute positions $m$ and $n$
+  individually. (Hint: expand the 2D rotation for a single dimension pair
+  and use the cosine angle subtraction formula.)
 \end{reviewquestion}
+
+\begin{reviewquestion}[4]
+  In the RoPE frequency formula $\theta_i = \text{base}^{-2i/d}$, what
+  happens when the base is very small (e.g., 100)? What about very large
+  (e.g., 1{,}000{,}000)? How does the base affect the model's sensitivity
+  to nearby vs.\ distant positions?
+\end{reviewquestion}
+
+\begin{reviewquestion}[5]
+  RoPE is applied only to Q and K, never to V. Explain why position
+  information should enter through attention scores rather than values.
+\end{reviewquestion}
+
+\begin{reviewquestion}[6]
+  The \texttt{rotate\_half} operation transforms $(q_{2i}, q_{2i+1})$
+  into $(-q_{2i+1}, q_{2i})$. Verify that the efficient formula
+  $q' = q \odot \cos + \text{rotate\_half}(q) \odot \sin$ gives the
+  same result as the explicit 2D rotation matrix.
+\end{reviewquestion}
+
+\begin{reviewquestion}[7]
+  Compare the SiLU and GELU activation functions. Under what conditions
+  is SiLU approximately equal to GELU? When do they diverge most?
+\end{reviewquestion}
+
+\begin{reviewquestion}[8]
+  The SwiGLU FFN uses three linear projections instead of two. If
+  $d_{\text{model}} = 4096$ and we want to match the standard FFN's
+  parameter count ($8\,d_{\text{model}}^2$), what should the hidden
+  dimension $d_{\text{ff}}$ be? Show the calculation.
+\end{reviewquestion}
+
+\begin{reviewquestion}[9]
+  In SwiGLU, the gate $W_{\text{gate}}(x)$ is multiplied element-wise
+  with $\text{SiLU}(W_{\text{up}}(x))$. Explain the role of the gate:
+  what happens when $\text{SiLU}(W_{\text{up}}(x))$ is close to zero
+  vs.\ close to identity?
+\end{reviewquestion}
+
+\begin{reviewquestion}[10]
+  Consider a model with 32 query heads and 8 KV heads using GQA.
+  During autoregressive generation, how much smaller is the KV cache
+  compared to standard MHA? At what cost---if any---to model quality?
+\end{reviewquestion}
+
+\begin{reviewquestion}[11]
+  Explain why \texttt{repeat\_interleave} is used in GQA rather than
+  a simple \texttt{repeat}. What is the difference in how the heads
+  are arranged along the head dimension?
+\end{reviewquestion}
+
+\begin{reviewquestion}[12]
+  GQA with $h_{\text{kv}} = h$ is standard MHA and $h_{\text{kv}} = 1$
+  is MQA. What are the tradeoffs between these extremes? Why might a
+  middle value like $h_{\text{kv}} = h/4$ be preferred?
+\end{reviewquestion}
+
+\section*{Problems}
+
+\begin{problem}[1]
+  \textbf{Implement RMSNorm.} Write a \texttt{nn.Module} class
+  \texttt{RMSNorm} that takes \texttt{embed\_dim} and \texttt{eps} as
+  arguments. The module should have a single learnable parameter
+  \texttt{weight} (initialized to ones) and should upcast to float32 for
+  the RMS computation before casting back. Test it by verifying that
+  (a) a zero input produces zero output and (b) scaling the input by a
+  constant $c$ results in the same output (RMSNorm is scale-invariant).
+\end{problem}
+
+\begin{problem}[2]
+  \textbf{Implement RoPE application to query and key tensors.} Write a
+  function \texttt{apply\_rotary\_emb(q, k, cos, sin)} that applies rotary
+  embeddings to the query and key tensors but \emph{not} the value tensor.
+  Verify correctness by checking: (a) at position 0, $q$ and $k$ are
+  unchanged; (b) for two positions $m$ and $n$, the dot product
+  $q_m^\top k_n$ depends only on $m - n$.
+\end{problem}
+
+\begin{problem}[3]
+  \textbf{Implement the SwiGLU FFN.} Write a \texttt{nn.Module} class
+  \texttt{SwiGLUFFN} with three linear projections
+  (\texttt{w\_gate}, \texttt{w\_up}, \texttt{w\_down}) and no biases.
+  The module should compute
+  $W_{\text{down}}(W_{\text{gate}}(x) \odot \text{SiLU}(W_{\text{up}}(x)))$.
+  Set the hidden dimension to
+  $\lfloor\frac{2}{3} \times 4 \times d_{\text{model}}\rfloor$ to match
+  the standard FFN's parameter budget.
+\end{problem}
+
+\begin{problem}[4]
+  \textbf{Implement the GQA forward pass.} Write a
+  \texttt{GroupedQueryAttention} module that supports any number of KV
+  heads between 1 and \texttt{num\_heads}. Use
+  \texttt{repeat\_interleave} to expand KV heads after projection but
+  before computing attention scores. Verify that
+  (a) setting \texttt{num\_kv\_heads = num\_heads} produces the same
+  output as standard MHA and (b) the KV cache size scales as
+  $h_{\text{kv}} / h$ relative to MHA.
+\end{problem}
+
+\begin{problem}[5]
+  \textbf{Benchmark KV cache sizes.} For a model with
+  $d_{\text{model}} = 4096$, 32 heads, head dimension 128, and 32
+  layers, compute the KV cache size (in MB) at sequence length 4096 for
+  MHA, GQA with 8 KV heads, and MQA. Assume fp16 precision. How does
+  the KV cache scale with sequence length for each variant?
+\end{problem}

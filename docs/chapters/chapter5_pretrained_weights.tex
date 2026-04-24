@@ -1,84 +1,446 @@
 \chapter{Loading Pretrained Weights}
 
-\section{HuggingFace GPT-2 Weight Layout}
+Training a large language model from scratch requires enormous computational
+resources---hundreds of GPU-hours for even a modest model. Rather than
+repeating this expensive process, we can load \emph{pretrained weights}:
+parameters that have already been trained on massive text corpora and
+published by other researchers. This practice, known as \textbf{transfer
+learning}, lets us skip pretraining entirely and immediately use or
+fine-tune a model that already understands language.
 
-HuggingFace's GPT-2 uses \texttt{Conv1D} layers instead of
-\texttt{nn.Linear}. The key difference:
+The most widely used repository for pretrained model weights is
+\textbf{HuggingFace}, an open-source platform that hosts thousands of
+models. OpenAI released the GPT-2 weights through HuggingFace, making them
+accessible to anyone. The general workflow for loading pretrained weights
+is:
+
+\begin{enumerate}
+  \item Identify the model architecture (e.g., GPT-2 Small with 12 layers,
+        768-dimensional embeddings, 12 attention heads).
+  \item Download the weight checkpoint from HuggingFace.
+  \item Determine the mapping between the checkpoint's parameter names and
+        the names in the target architecture.
+  \item Handle any differences in how weights are stored (e.g.,
+        transpositions, fused matrices).
+  \item Assign the weights to the model, skipping any parameters that
+        differ in shape or don't have a match.
+\end{enumerate}
+
+This chapter walks through each of these steps for GPT-2, explaining the
+subtleties that arise when two implementations of the same architecture
+store their parameters differently.
+
+\section{Linear Layers and Weight Matrices}
+
+Before diving into weight loading, we need to understand how linear
+transformations are represented in neural networks and how their weights
+are stored.
+
+A \textbf{linear layer} (also called a fully connected or dense layer)
+performs the transformation:
+\[
+  y = Wx + b
+\]
+where $x \in \mathbb{R}^{d_{\text{in}}}$ is the input vector,
+$W \in \mathbb{R}^{d_{\text{out}} \times d_{\text{in}}}$ is the weight
+matrix, and $b \in \mathbb{R}^{d_{\text{out}}}$ is the bias vector.
+
+In PyTorch, \texttt{nn.Linear(in\_features, out\_features)} stores the
+weight matrix as a tensor of shape
+$[\text{out\_features}, \text{in\_features}]$. This convention comes from
+the matrix multiplication $y = Wx$: the weight matrix has one row per
+output dimension and one column per input dimension.
+
+\begin{keyconcept}
+  The two linear layers in the GPT-2 feed-forward network (FFN) serve
+  different roles:
+  \begin{itemize}
+    \item \textbf{Expansion layer} ($W_1$, called \texttt{ff1}): maps from
+          embedding dimension (768) to a hidden dimension (3072). This is a
+          $4\times$ expansion that gives the model more capacity to learn
+          complex features.
+    \item \textbf{Projection layer} ($W_2$, called \texttt{ff2}): maps from
+          hidden dimension (3072) back down to embedding dimension (768).
+  \end{itemize}
+  In GPT-2, the FFN computation is:
+  $\text{FFN}(x) = W_2 \cdot \text{GELU}(W_1 x + b_1) + b_2$
+\end{keyconcept}
+
+Similarly, the multi-head attention mechanism uses four linear layers in
+each transformer block:
+
+\begin{keyconcept}
+  Multi-head attention projects the input into three sets of vectors and
+  then combines the result:
+  \begin{itemize}
+    \item $W_Q$ (\texttt{W\_q}): the \textbf{query} projection. Maps input
+          from embedding dimension (768) to the total query dimension (768).
+          Each attention head uses a 64-dimensional slice.
+    \item $W_K$ (\texttt{W\_k}): the \textbf{key} projection. Same
+          dimensions as $W_Q$. Keys represent ``what information I hold.''
+    \item $W_V$ (\texttt{W\_v}): the \textbf{value} projection. Same
+          dimensions. Values represent ``what content I provide when
+          attended to.''
+    \item $W_O$ (\texttt{W\_o}): the \textbf{output} projection. Maps from
+          embedding dimension (768) back to embedding dimension (768),
+          combining the outputs of all heads.
+  \end{itemize}
+  Each of $W_Q$, $W_K$, $W_V$ is stored as an \texttt{nn.Linear(768, 768)}
+  with shape $[768, 768]$.
+\end{keyconcept}
+
+\section{Conv1D vs.\ Linear: Why the Transpose Matters}
+
+HuggingFace's GPT-2 implementation uses \texttt{Conv1D} layers instead of
+\texttt{nn.Linear}. Despite the name, \texttt{Conv1D} here does not
+perform convolution---it is simply a linear layer that stores its weight
+matrix in a \emph{transposed} layout compared to \texttt{nn.Linear}.
+
+The key difference is in how each layer computes the forward pass:
+\begin{itemize}
+  \item \texttt{nn.Linear}: $y = x \cdot W^\top + b$, where
+        $W$ has shape $[\text{out\_features}, \text{in\_features}]$.
+  \item \texttt{Conv1D}: $y = x \cdot W + b$, where
+        $W$ has shape $[\text{in\_features}, \text{out\_features}]$.
+\end{itemize}
+
+Both compute the same mathematical operation---a linear projection. The
+difference is purely in storage layout:
 
 \begin{center}
 \begin{tabular}{lll}
 \toprule
- & \textbf{HuggingFace (Conv1D)} & \textbf{Our code (Linear)} \\
+ & \textbf{HuggingFace (Conv1D)} & \textbf{Standard (nn.Linear)} \\
 \midrule
 Weight shape & $[\text{in\_features}, \text{out\_features}]$ & $[\text{out\_features}, \text{in\_features}]$ \\
-Transpose needed? & Yes & No \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\section{Weight Mapping}
-
-The mapping between our architecture and HuggingFace's naming:
-
-\begin{center}
-\begin{tabular}{ll}
-\toprule
-\textbf{Our name} & \textbf{HuggingFace name} \\
-\midrule
-\texttt{embedding.token.weight} & \texttt{transformer.wte.weight} \\
-\texttt{embedding.positional.weight} & \texttt{transformer.wpe.weight} \\
-\texttt{blocks[$i$].attn.W\_q.weight} & \texttt{transformer.h[$i$].attn.c\_attn.weight}[:, :768] \\
-\texttt{blocks[$i$].attn.W\_k.weight} & \texttt{transformer.h[$i$].attn.c\_attn.weight}[:, 768:1536] \\
-\texttt{blocks[$i$].attn.W\_v.weight} & \texttt{transformer.h[$i$].attn.c\_attn.weight}[:, 1536:] \\
-\texttt{blocks[$i$].attn.W\_o.weight} & \texttt{transformer.h[$i$].attn.c\_proj.weight} \\
-\texttt{blocks[$i$].ff.ff1.weight} & \texttt{transformer.h[$i$].mlp.c\_fc.weight} \\
-\texttt{blocks[$i$].ff.ff2.weight} & \texttt{transformer.h[$i$].mlp.c\_proj.weight} \\
+Forward pass & $x \cdot W + b$ & $x \cdot W^\top + b$ \\
+Transpose needed when loading? & Yes & No \\
 \bottomrule
 \end{tabular}
 \end{center}
 
 \begin{keyconcept}
-  HuggingFace stores Q, K, V as a single fused matrix
-  \texttt{c\_attn} of shape $[768, 2304]$, which is the concatenation
-  of $W_Q$, $W_K$, $W_V$ along the output dimension. We split this
-  into three separate $[768, 768]$ matrices.
+  The Conv1D convention comes from early deep learning frameworks where
+  a 1D convolution with kernel size 1 is mathematically equivalent to a
+  linear layer. HuggingFace inherited this convention from the original
+  OpenAI GPT-2 code release. When loading HuggingFace GPT-2 weights into a
+  model that uses \texttt{nn.Linear}, every Conv1D weight must be
+  transposed.
 \end{keyconcept}
+
+To see why the transpose is necessary, consider a concrete example. A
+layer projecting from 768 to 3072 dimensions:
+\begin{itemize}
+  \item HuggingFace stores it as shape $[768, 3072]$.
+  \item \texttt{nn.Linear(768, 3072)} expects shape $[3072, 768]$.
+\end{itemize}
+Loading the HuggingFace weight directly into \texttt{nn.Linear} would cause
+a shape mismatch. The fix is to transpose:
+\texttt{weight.data = hf\_weight.T}.
+
+\section{Weight Mapping}
+
+The GPT-2 model consists of an embedding layer, 12 transformer blocks, a
+final layer norm, and a linear output projection (the LM head). Each
+transformer block contains the attention sublayers ($W_Q$, $W_K$, $W_V$,
+$W_O$) and the feed-forward sublayers ($W_1$, $W_2$), along with their
+biases and layer norm parameters.
+
+HuggingFace's naming convention differs from what a straightforward
+implementation might use. The mapping below shows how each parameter in a
+standard implementation corresponds to a parameter in the HuggingFace
+checkpoint:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Component} & \textbf{Standard name} & \textbf{HuggingFace name} \\
+\midrule
+Token embedding & \texttt{embedding.token.weight} & \texttt{transformer.wte.weight} \\
+Position embedding & \texttt{embedding.positional.weight} & \texttt{transformer.wpe.weight} \\
+Query projection & \texttt{blocks[$i$].attn.W\_q.weight} & \texttt{h[$i$].attn.c\_attn.weight}[:, :768] \\
+Key projection & \texttt{blocks[$i$].attn.W\_k.weight} & \texttt{h[$i$].attn.c\_attn.weight}[:, 768:1536] \\
+Value projection & \texttt{blocks[$i$].attn.W\_v.weight} & \texttt{h[$i$].attn.c\_attn.weight}[:, 1536:] \\
+Output projection & \texttt{blocks[$i$].attn.W\_o.weight} & \texttt{h[$i$].attn.c\_proj.weight} \\
+FFN expansion & \texttt{blocks[$i$].ff.ff1.weight} & \texttt{h[$i$].mlp.c\_fc.weight} \\
+FFN projection & \texttt{blocks[$i$].ff.ff2.weight} & \texttt{h[$i$].mlp.c\_proj.weight} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+There are two important differences beyond naming:
+
+\subsection{Fused QKV Matrix}
+
+HuggingFace stores the query, key, and value projections as a single fused
+matrix:
+
+\begin{keyconcept}
+  HuggingFace combines $W_Q$, $W_K$, and $W_V$ into one
+  \texttt{c\_attn} matrix of shape $[768, 2304]$. This is the
+  concatenation of $W_Q$, $W_K$, and $W_V$ along the output dimension:
+  \[
+    \texttt{c\_attn.weight} = [W_Q \;||\; W_K \;||\; W_V]
+  \]
+  where each sub-matrix has shape $[768, 768]$ and $3 \times 768 = 2304$.
+  To extract the individual projections, we split along the second axis.
+\end{keyconcept}
+
+\subsection{Transpositions}
+
+Every weight listed in the table above comes from a \texttt{Conv1D} layer
+in HuggingFace's implementation, which means every one of these weights
+must be transposed when loading into an \texttt{nn.Linear}-based model.
+
+\section{Loading the Weights}
+
+Loading pretrained weights requires iterating through the checkpoint's
+parameter names, matching each to the correct parameter in the target
+model, and applying any necessary transformations (transpositions,
+splits).
+
+\begin{pseudocode}[Load HuggingFace GPT-2 Weights]
+def load_gpt2_weights(model: GPTModel, hf_params: dict) -> None:
+    # hf_params: flat dict mapping parameter names to tensors
+    # Number of layers extracted from the checkpoint
+    n_layers = hf_params["transformer.h.__0__"].shape  # or infer from keys
+    for name, param in model.named_parameters():
+        # Skip biases and layer norms for brevity
+        # Match name patterns to HuggingFace equivalents
+        if name == "embedding.token.weight":
+            param.data = hf_params["transformer.wte.weight"]
+        elif name == "embedding.positional.weight":
+            param.data = hf_params["transformer.wpe.weight"]
+        elif "attn.W_q" in name:
+            # Slice columns 0:768 from the fused c_attn, then transpose
+            # Shape: [768, 768] (after transpose) -> [768, 768]
+            W_q = hf_params[hf_name][:, :768].T
+            param.data = W_q
+        elif "attn.W_k" in name:
+            # Slice columns 768:1536 from the fused c_attn, then transpose
+            W_k = hf_params[hf_name][:, 768:1536].T
+            param.data = W_k
+        elif "attn.W_v" in name:
+            # Slice columns 1536: from the fused c_attn, then transpose
+            W_v = hf_params[hf_name][:, 1536:].T
+            param.data = W_v
+        elif "attn.W_o" in name:
+            # c_proj has shape [768, 768], transpose for nn.Linear
+            param.data = hf_params[hf_name].T
+        elif "ff.ff1" in name:
+            # c_fc has shape [768, 3072], transpose for nn.Linear
+            # After transpose: [3072, 768] matching nn.Linear(768, 3072)
+            param.data = hf_params[hf_name].T
+        elif "ff.ff2" in name:
+            # c_proj has shape [3072, 768], transpose for nn.Linear
+            # After transpose: [768, 3072] matching nn.Linear(3072, 768)
+            param.data = hf_params[hf_name].T
+\end{pseudocode}
+
+\begin{keyconcept}
+  The weight loading process involves three types of transformations:
+  \begin{itemize}
+    \item \textbf{Direct copy}: token and positional embeddings transfer
+          directly with no transformation.
+    \item \textbf{Transpose}: all linear and Conv1D weights require
+          transposition because of the storage layout difference.
+    \item \textbf{Split + transpose}: the fused QKV matrix must first be
+          split into three slices along the output dimension, then each
+          slice is transposed.
+  \end{itemize}
+\end{keyconcept}
+
+A robust implementation should also handle parameters that don't have a
+match---the final layer norm, biases, and any extra parameters should be
+skipped with a warning rather than causing an error.
 
 \section{Weight Tying}
 
-In GPT-2, the token embedding matrix and the output projection (LM
-head) share weights:
+In GPT-2, the token embedding matrix and the output projection (the
+\emph{language model head}, or LM head) share the same weight tensor:
 
 \[
   \texttt{lm\_head.weight} = \texttt{embedding.token.weight}
 \]
 
+This practice, called \textbf{weight tying} (or weight sharing), means the
+same matrix is used for two different purposes:
+
+\begin{enumerate}
+  \item \textbf{At input}: mapping token IDs to embedding vectors (looking
+        up rows of the matrix).
+  \item \textbf{At output}: projecting the final hidden state to vocabulary
+        logits (matrix multiplication with the hidden state).
+\end{enumerate}
+
 \begin{keyconcept}
-  Weight tying saves $\sim$38M parameters for GPT-2 Small
-  (vocabulary size 50,257 $\times$ embedding dimension 768). It also
-  ensures that the same representations used to embed tokens are used
-  to predict them, which has been shown to improve performance.
+  Weight tying saves approximately 38M parameters for GPT-2 Small
+  (vocabulary size 50,257 $\times$ embedding dimension 768 $= 38,597,376$
+  parameters, roughly one-third of the model's 124M total). Beyond saving
+  memory, weight tying has a theoretical motivation: the same
+  representations used to encode tokens should be useful for decoding them.
+  If a token is embedded near certain vectors, the output projection should
+  assign high probability to that same token when those vectors appear.
+  This symmetry has been shown to improve model quality, especially in
+  early training.
 \end{keyconcept}
+
+When loading HuggingFace weights, the LM head matrix does not appear as a
+separate entry in the checkpoint---it is simply the token embedding matrix
+reused. Any implementation must explicitly tie these weights:
+
+\begin{pseudocode}[Weight Tying]
+def tie_weights(model: GPTModel) -> None:
+    # lm_head is a nn.Linear layer projecting from 768 to 50257
+    # embedding.token is an nn.Embedding of shape [50257, 768]
+    model.lm_head.weight = model.embedding.token.weight
+    # Now both parameters point to the same underlying tensor
+\end{pseudocode}
+
+\section{Validating Loaded Weights}
+
+After loading weights, it is crucial to verify that the model works
+correctly. A model with improperly loaded weights---for example, if a
+transposition was forgotten or if Q and V were swapped---will produce
+gibberish rather than coherent text.
+
+The simplest validation is to generate text from a known prompt and check
+that the output is coherent:
+
+\begin{pseudocode}[Validate Loaded Weights via Text Generation]
+def validate_weights(model: GPTModel, tokenizer: Tokenizer) -> None:
+    # The model should produce coherent English text
+    prompt = "The capital of France is"
+    token_ids = tokenizer.encode(prompt)
+    # [batch, seq_len] = [1, 5]
+    input_tensor = torch.tensor([token_ids])
+
+    # Generate 20 new tokens using greedy decoding
+    for _ in range(20):
+        # logits shape: [1, seq_len, vocab_size]
+        logits = model(input_tensor)
+        # Take logits at the last position only
+        next_token_id = logits[:, -1, :].argmax(dim=-1)  # [1]
+        input_tensor = torch.cat([input_tensor, next_token_id.unsqueeze(1)], dim=1)
+
+    output_text = tokenizer.decode(input_tensor[0])
+    # Expected: coherent continuation like " Paris, which is the..."
+    print(output_text)
+\end{pseudocode}
+
+\begin{keyconcept}
+  \textbf{Common bugs when loading weights:}
+  \begin{itemize}
+    \item \textbf{Forgetting to transpose}: the model runs but produces
+          gibberish because every linear layer computes $x \cdot W$ instead
+          of $x \cdot W^\top$.
+    \item \textbf{Swapping Q, K, V}: splitting the fused matrix incorrectly
+          results in nonsensical attention patterns.
+    \item \textbf{Missing weight tying}: the LM head uses random weights
+          while the embedding uses pretrained weights, so the model cannot
+          predict tokens correctly.
+    \item \textbf{Shape mismatches}: silently assigning a wrong-shaped tensor
+          (e.g., not splitting the fused QKV) causes dimension errors.
+  \end{itemize}
+\end{keyconcept}
+
+Another useful check is to verify that the loaded parameters match the
+expected shapes and have reasonable statistics (mean near zero, standard
+deviation near 0.02 for GPT-2):
+
+\begin{pseudocode}[Verify Weight Shapes and Statistics]
+def verify_weights(model: GPTModel) -> None:
+    for name, param in model.named_parameters():
+        # Check shape matches expected dimensions
+        print(f"{name}: shape={param.shape}")
+        # GPT-2 weights initialized from N(0, 0.02)
+        mean = param.data.mean().item()
+        std = param.data.std().item()
+        # Embedding weights have different scale; skip them
+        if "embedding" not in name:
+            assert abs(mean) < 0.01, f"{name} has suspicious mean: {mean}"
+            # std should be close to 0.02 for trained weights
+            assert 0.005 < std < 0.1, f"{name} has suspicious std: {std}"
+\end{pseudocode}
 
 \section{Perplexity Evaluation}
 
-\textbf{Perplexity} is the standard metric for evaluating language models:
+Once the pretrained weights are loaded and validated, we need a way to
+quantitatively measure how well the model predicts text. The standard
+metric for evaluating language models is \textbf{perplexity}.
+
+\subsection{What Is Perplexity?}
+
+Perplexity measures how ``surprised'' the model is by the text it sees. A
+model that always assigns high probability to the correct next token has
+low perplexity; a model that is frequently surprised has high perplexity.
+
+Formally, given a sequence of tokens $w_1, w_2, \ldots, w_N$, the model
+assigns each token a probability conditioned on the preceding tokens:
+$P(w_i \mid w_1, \ldots, w_{i-1})$. Perplexity is defined as:
 
 \[
   \text{Perplexity} = \exp\!\left(\frac{1}{N}\sum_{i=1}^{N} -\log P(w_i \mid w_{<i})\right)
-  = \exp(\text{average cross-entropy loss})
+  = \exp(\text{average cross-entropy loss per token})
 \]
 
 \begin{keyconcept}
   Perplexity can be interpreted as ``on average, how many tokens is the
   model equally uncertain about at each step.'' A perplexity of 30
-  means the model is as uncertain as if it were choosing uniformly
-  among 30 tokens.
+  means the model is as uncertain as if it were choosing uniformly among
+  30 tokens at each position.
 
-  \textbf{Context length matters}: longer contexts give lower perplexity
-  because the model has more information. Always compare perplexity at
-  the same context length.
+  \textbf{Lower perplexity is better.} A perfect model that always assigns
+  probability 1 to the correct next token would have perplexity 1. GPT-2
+  Small achieves a perplexity around 30--40 on standard benchmarks like
+  WikiText-103.
 \end{keyconcept}
+
+\subsection{Computing Perplexity}
+
+Computing perplexity from a trained model involves three steps: tokenize
+the evaluation text, run the model on the token sequences, and average the
+cross-entropy loss across all tokens.
+
+\begin{pseudocode}[Compute Perplexity]
+def compute_perplexity(model: GPTModel, texts: list[str],
+                       tokenizer: Tokenizer,
+                       max_length: int = 1024) -> float:
+    total_loss = 0.0
+    total_tokens = 0
+    for text in texts:
+        # Tokenize and truncate to max_length
+        token_ids = tokenizer.encode(text)[:max_length]
+        # input: [seq_len] = [max_length]
+        input_tensor = torch.tensor([token_ids])
+        # targets: shifted by 1 position
+        targets = input_tensor[:, 1:]   # [1, seq_len - 1]
+        logits = model(input_tensor)[:, :-1, :]  # [1, seq_len - 1, vocab_size]
+
+        # Cross-entropy loss averaged over tokens
+        loss = cross_entropy(logits.reshape(-1, vocab_size),
+                             targets.reshape(-1))
+        total_loss += loss.item() * (len(token_ids) - 1)
+        total_tokens += len(token_ids) - 1
+
+    avg_loss = total_loss / total_tokens
+    perplexity = math.exp(avg_loss)
+    return perplexity
+\end{pseudocode}
+
+\begin{keyconcept}
+  \textbf{Context length matters}: longer contexts give lower perplexity
+  because the model has more information to condition on. Always compare
+  perplexity at the same context length. A model evaluated with 1024-token
+  contexts will appear better than the same model evaluated with 128-token
+  contexts, even though the model itself is identical.
+\end{keyconcept}
+
+When computing perplexity, it is important to handle long texts properly.
+The standard approach is to slide a window of length \texttt{max\_length}
+across the text with some stride, computing loss only on the tokens that
+fit within each window. This ensures every token is evaluated with the
+maximum possible context.
 
 \section*{Review Questions}
 
@@ -98,3 +460,114 @@ head) share weights:
   You evaluate the same model at context length 128 and context length
   1024. Which evaluation gives lower perplexity, and why?
 \end{reviewquestion}
+
+\begin{reviewquestion}[4]
+  HuggingFace stores $W_Q$, $W_K$, and $W_V$ as a single fused matrix
+  of shape $[768, 2304]$. How would you extract the individual weight
+  matrices, and what is the shape of each after extraction?
+\end{reviewquestion}
+
+\begin{reviewquestion}[5]
+  Suppose you forgot to transpose a Conv1D weight when loading it into an
+  \texttt{nn.Linear} layer. Will the model crash, produce garbage, or
+  produce slightly degraded output? Explain your reasoning.
+\end{reviewquestion}
+
+\begin{reviewquestion}[6]
+  How many parameters does weight tying save for GPT-2 Small? Express
+  your answer both as a count and as a fraction of total model parameters.
+\end{reviewquestion}
+
+\begin{reviewquestion}[7]
+  Why does the GPT-2 FFN expand the hidden dimension from 768 to 3072
+  before projecting back down? What would happen if the hidden dimension
+  were equal to the embedding dimension (i.e., no expansion)?
+\end{reviewquestion}
+
+\begin{reviewquestion}[8]
+  A model achieves a perplexity of 1.0 on a dataset. What does this mean
+  about the model's predictions? Is this realistic in practice?
+\end{reviewquestion}
+
+\begin{reviewquestion}[9]
+  You load GPT-2 weights but forget to tie the LM head weights to the
+  embedding weights. The LM head is now using its randomly initialized
+  weights. What will the model's output look like, and why?
+\end{reviewquestion}
+
+\begin{reviewquestion}[10]
+  When computing perplexity on a long document, why is it insufficient to
+  simply truncate the text to \texttt{max\_length}? Describe a better
+  approach.
+\end{reviewquestion}
+
+\begin{reviewquestion}[11]
+  The query, key, and value projections all map from 768 to 768
+  dimensions. Could they share a single weight matrix? What would be the
+  consequence?
+\end{reviewquestion}
+
+\begin{reviewquestion}[12]
+  Why is Conv1D called ``Conv1D'' when it performs a linear (matrix
+  multiplication) operation? What is the historical reason?
+\end{reviewquestion}
+
+\begin{reviewquestion}[13]
+  Explain the mathematical relationship between cross-entropy loss and
+  perplexity. If a model's average cross-entropy loss is 3.5, what is its
+  perplexity?
+\end{reviewquestion}
+
+\section*{Problems}
+
+\begin{problem}[1]
+  Write a function \texttt{load\_gpt2\_weights(model, checkpoint\_path)} that
+  loads GPT-2 weights from a HuggingFace checkpoint file
+  (\texttt{.bin} or \texttt{.safetensors}). Your function should:
+  (a) iterate through all parameters in the checkpoint,
+  (b) match each to the correct parameter in the model,
+  (c) apply the necessary transpositions for Conv1D weights, and
+  (d) handle the fused QKV matrix by splitting it into three separate
+  weight matrices. Print a summary of loaded vs.\ skipped parameters.
+\end{problem}
+
+\begin{problem}[2]
+  Verify weight tying in a loaded GPT-2 model. Write code that:
+  (a) loads the pretrained weights including weight tying,
+  (b) checks that \texttt{model.lm\_head.weight} and
+  \texttt{model.embedding.token.weight} point to the same tensor in memory
+  (use \texttt{id()} or \texttt{torch.equal()}),
+  (c) modifies one entry in the token embedding and verifies that the
+  corresponding entry in the LM head also changes.
+\end{problem}
+
+\begin{problem}[3]
+  Implement a perplexity evaluation function that processes an arbitrary
+  text dataset. Use a sliding window approach with configurable stride.
+  Compare the perplexity of a model with correctly loaded GPT-2 weights
+  against the same model with randomly initialized weights. How many
+  orders of magnitude different are the perplexities?
+\end{problem}
+
+\begin{problem}[4]
+  Write a diagnostic function \texttt{diagnose\_weight\_loading(model)} that
+  checks each layer of a loaded GPT-2 model for common loading errors:
+  (a) verify that weight matrices have the expected shapes,
+  (b) check that means are near zero and standard deviations are near 0.02,
+  (c) detect any weights that are still at their random initialization
+  (by checking if the standard deviation matches the initialization
+  distribution rather than the pretrained distribution), and
+  (d) generate a short text sample and print the first few predicted tokens
+  to verify coherence.
+\end{problem}
+
+\begin{problem}[5]
+  The fused QKV matrix in HuggingFace GPT-2 has shape $[768, 2304]$. Write
+  a function that given this matrix, splits it into $W_Q$, $W_K$, and
+  $W_V$, transposes each for use in \texttt{nn.Linear}, and assigns them
+  to the corresponding model parameters. Then verify correctness by:
+  (a) reconstructing the fused matrix from the individual weights and
+  confirming it matches the original, and (b) checking that a forward pass
+  through the attention layer produces the same output whether you use
+  the fused or split weights.
+\end{problem}

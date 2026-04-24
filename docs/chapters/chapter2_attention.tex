@@ -1,9 +1,36 @@
 \chapter{Attention Mechanism}
 
+Before the transformer, the dominant architecture for sequence modeling was the
+recurrent neural network (RNN). RNNs process tokens one at a time, maintaining a
+hidden state that carries information forward. This sequential bottleneck has two
+consequences: training cannot be parallelized across time steps, and the model
+struggles to carry information across long distances because the hidden state is
+repeatedly overwritten.
+
+The attention mechanism solves both problems. Instead of compressing everything
+into a fixed-size hidden state, attention allows every position in a sequence to
+directly inspect every other position in a single step. No information needs to
+be ``squeezed through a bottleneck''---it is retrieved on demand. This idea is
+the core innovation behind transformers and, by extension, every modern large
+language model.
+
+This chapter builds the attention mechanism from the ground up. It starts with
+simplified self-attention (no learnable parameters), adds the Q/K/V projections
+and scaling to arrive at scaled dot-product attention, introduces causal masking
+for autoregressive generation, and then combines everything into multi-head
+attention---the form used in real transformers. Along the way, it discusses
+attention as a soft dictionary lookup and addresses the $O(n^2)$ complexity that
+motivates many modern optimizations.
+
 \section{Simplified Self-Attention}
 
-The simplest form of self-attention uses no learnable parameters:
-the input embeddings directly produce attention weights.
+The simplest form of self-attention uses no learnable parameters at all: the
+input embeddings directly produce attention weights. While this version is too
+simple for a real model, it reveals the core idea clearly.
+
+Consider a sequence of $n$ embedding vectors $X \in \mathbb{R}^{n \times d}$,
+where each row is the $d$-dimensional embedding of one token. Self-attention
+computes, for each position, a weighted sum of all positions in the sequence:
 
 \[
   \text{scores} = X \cdot X^\top, \qquad
@@ -11,38 +38,124 @@ the input embeddings directly produce attention weights.
   \text{output} = \text{attn\_weights} \cdot X
 \]
 
+Intuitively, the score matrix $X X^\top$ measures how similar each pair of
+positions is (via dot product). Softmax normalizes each row of scores into a
+probability distribution. The output at position $i$ is then a convex combination
+of all input embeddings, weighted by how relevant each position is to position $i$.
+
+\begin{pseudocode}[Simplified Self-Attention (No Learnable Parameters)]
+def simplified_self_attention(X: Tensor) -> Tensor:
+    # X: [seq_len, embed_dim]
+    scores = X @ X.transpose(-2, -1)  # [seq_len, embed_dim] @ [embed_dim, seq_len] -> [seq_len, seq_len]
+    attn_weights = softmax(scores, dim=-1)  # [seq_len, seq_len]
+    output = attn_weights @ X  # [seq_len, seq_len] @ [seq_len, embed_dim] -> [seq_len, embed_dim]
+    return output
+\end{pseudocode}
+
 \begin{keyconcept}
   Self-attention lets each position in a sequence attend to (i.e.,
   compute a weighted average of) all other positions. Without learnable
   parameters, it computes similarity purely from the embedding geometry.
+  The similarity function is the dot product, which measures how aligned
+  two vectors are. Because the weights are produced by softmax, each row
+  sums to 1, making the output a true weighted average rather than an
+  arbitrary linear combination.
+\end{keyconcept}
+
+\begin{keyconcept}
+  \textbf{Why attention replaced RNNs.}
+  An RNN must process tokens left-to-right, so position~$n$ can only
+  access position~1 through $n{-}1$ intermediate hidden states. Each
+  step is a potential point of information loss. Attention eliminates this
+  bottleneck: position~$n$ attends directly to position~1 in a single
+  operation, and---crucially---all positions can be computed in parallel
+  because there is no sequential dependency between them.
 \end{keyconcept}
 
 \section{Scaled Dot-Product Attention}
 
-Adding learnable projections $W_Q$, $W_K$, $W_V$ transforms raw
-embeddings into queries, keys, and values that the model can adapt:
+Simplified self-attention has a problem: the similarity measure is fixed.
+The model cannot learn \emph{what} to attend to---it is stuck with raw dot
+products. The solution is to introduce three learnable projection matrices:
+$W_Q$, $W_K$, and $W_V$. These transform the input embeddings into queries,
+keys, and values:
+
+\begin{itemize}
+  \item \textbf{Query} ($Q$): ``What am I looking for?''---what information this
+        position needs.
+  \item \textbf{Key} ($K$): ``What do I contain?''---what information this
+        position offers.
+  \item \textbf{Value} ($V$): ``What content do I provide?''---the actual
+        content returned when a match is found.
+\end{itemize}
+
+\begin{keyconcept}[Database analogy]
+  Think of attention as querying a database:
+  \begin{itemize}
+    \item A \textbf{query} is your search term (e.g., ``French capital'').
+    \item A \textbf{key} is the label on each database entry (e.g., ``City name: Paris'').
+    \item A \textbf{value} is the content stored in that entry (e.g., ``Paris is the capital of France, population 2.2 million'').
+    \item The \textbf{attention score} measures how well each key matches the query
+          (``French capital'' matches ``City name: Paris'' strongly but matches
+          ``Language: Python'' weakly).
+    \item The \textbf{output} is a weighted combination of all values, with higher
+          weight on entries whose keys better match the query.
+  \end{itemize}
+  Unlike a standard database lookup that returns a single hard match, attention
+  returns a \emph{soft} combination of all entries.
+\end{keyconcept}
+
+The attention computation with learnable projections is:
 
 \[
   \text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V
 \]
 
+where $Q = X W_Q$, $K = X W_K$, and $V = X W_V$. The division by $\sqrt{d_k}$
+is the \emph{scaling} that gives this variant its name.
+
+\begin{pseudocode}[Scaled Dot-Product Attention]
+def scaled_dot_product_attention(Q: Tensor, K: Tensor, V: Tensor) -> Tensor:
+    # Q: [batch, seq_len, d_k], K: [batch, seq_len, d_k], V: [batch, seq_len, d_v]
+    d_k = Q.size(-1)
+    scores = Q @ K.transpose(-2, -1)  # [batch, seq_len, d_k] @ [batch, d_k, seq_len] -> [batch, seq_len, seq_len]
+    scaled_scores = scores / math.sqrt(d_k)  # [batch, seq_len, seq_len]
+    attn_weights = softmax(scaled_scores, dim=-1)  # [batch, seq_len, seq_len]
+    output = attn_weights @ V  # [batch, seq_len, seq_len] @ [batch, seq_len, d_v] -> [batch, seq_len, d_v]
+    return output
+\end{pseudocode}
+
 \begin{keyconcept}
   \textbf{Why scale by $\sqrt{d_k}$?} Without scaling, large
   dot products push softmax into saturation (near-one and near-zero
-  outputs), leading to tiny gradients. Dividing by $\sqrt{d_k}$ keeps
-  the softmax in its linear regime where gradients are healthy.
+  outputs), leading to tiny gradients. To see why, consider $d_k = 64$:
+  the variance of the dot product of two random vectors of dimension $d_k$
+  is $d_k$. Dividing by $\sqrt{d_k}$ restores the variance to 1, keeping
+  the softmax in its linear regime where gradients are healthy. If
+  $\sqrt{d_k}$ were omitted with $d_k = 64$, the typical dot product would
+  have magnitude $\sim\!8$, and softmax would saturate, producing
+  near-one-hot vectors and gradient magnitudes on the order of $0.001$
+  instead of $\sim\!0.1$.
 \end{keyconcept}
 
 \section{Causal (Masked) Self-Attention}
 
-In autoregressive models, positions must not attend to future tokens.
-A causal mask sets future scores to $-\infty$ before softmax:
+The attention mechanism described so far lets every position attend to every
+other position. This is fine for tasks like translation or classification, where
+the entire input is available at once. But for autoregressive language
+models---which generate one token at a time---positions must not attend to
+future tokens. At training time, the full sequence is available, so the model
+must be explicitly prevented from ``peeking ahead.''
+
+A causal mask enforces this constraint by setting future attention scores to
+$-\infty$ before softmax. Because $\exp(-\infty) = 0$, any position whose score
+is $-\infty$ receives zero weight after softmax:
 
 \[
   \text{mask}_{ij} =
   \begin{cases}
-    0 & \text{if } j \leq i \\
-    -\infty & \text{if } j > i
+    0 & \text{if } j \leq i \quad\text{(position $i$ may attend to position $j$)} \\
+    -\infty & \text{if } j > i \quad\text{(position $i$ must not attend to future position $j$)}
   \end{cases}
 \]
 
@@ -60,73 +173,168 @@ A causal mask sets future scores to $-\infty$ before softmax:
   }
 \end{tikzpicture}
 
+The masked attention computation is:
+
+\[
+  \text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}} + \text{mask}\right)V
+\]
+
+\begin{pseudocode}[Causal (Masked) Self-Attention]
+def causal_self_attention(Q: Tensor, K: Tensor, V: Tensor) -> Tensor:
+    # Q: [batch, seq_len, d_k], K: [batch, seq_len, d_k], V: [batch, seq_len, d_v]
+    d_k = Q.size(-1)
+    seq_len = Q.size(-2)
+    scores = Q @ K.transpose(-2, -1)  # [batch, seq_len, d_k] @ [batch, d_k, seq_len] -> [batch, seq_len, seq_len]
+    scaled_scores = scores / math.sqrt(d_k)  # [batch, seq_len, seq_len]
+    # Create causal mask: upper triangle is True (positions to block)
+    mask = torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool), diagonal=1)  # [seq_len, seq_len]
+    scaled_scores = scaled_scores.masked_fill(mask, float('-inf'))  # [batch, seq_len, seq_len]
+    attn_weights = softmax(scaled_scores, dim=-1)  # [batch, seq_len, seq_len]
+    output = attn_weights @ V  # [batch, seq_len, seq_len] @ [batch, seq_len, d_v] -> [batch, seq_len, d_v]
+    return output
+\end{pseudocode}
+
 \begin{keyconcept}
   Note: we use
   \texttt{masked\_fill(mask, -inf)} rather than multiplying,
   because $0 \times (-\infty) = \text{NaN}$.
   \texttt{masked\_fill} is differentiable and avoids NaN entirely.
+  In practice, some implementations add the mask as an additive bias
+  ($+\text{mask}$) where the mask contains $0$ for allowed positions
+  and $-\infty$ for blocked positions---this is equivalent to
+  \texttt{masked\_fill}.
 \end{keyconcept}
 
 \section{Multi-Head Attention}
 
-Instead of one attention computation, multi-head attention splits the
-embedding dimension into $h$ heads, each attending independently, then
-concatenates and projects the result.
+A single attention head computes one set of attention weights, which means it
+can learn only one pattern of relationships. In practice, language has many
+kinds of relationships: grammatical subject--verb agreement, coreference
+resolution, semantic relatedness, positional proximity, and more. Multi-head
+attention addresses this by running $h$ parallel attention computations (``heads''),
+each with its own Q/K/V projections, then concatenating and projecting the
+results.
+
+Instead of one large attention computation with dimension $d_{\text{model}}$,
+multi-head attention splits the embedding dimension into $h$ heads of dimension
+$d_k = d_{\text{model}} / h$. Each head can attend to different aspects of the
+input independently. The outputs are concatenated and passed through a final
+linear projection $W_O$ that lets heads interact and mix information.
 
 \begin{pseudocode}[Multi-Head Attention]
-$Q \leftarrow W_Q(x)$, \quad $K \leftarrow W_K(x)$, \quad $V \leftarrow W_V(x)$\\[3pt]
-Reshape $Q, K, V$ to $[\text{batch}, h, \text{seq}, d_k]$\\
-\textbf{for} each head $i$:\\
-\quad $\text{head}_i \leftarrow \text{Attention}(Q_i, K_i, V_i)$\\
-$\text{concat} \leftarrow [\text{head}_1; \ldots; \text{head}_h]$\\
-$\text{output} \leftarrow W_O(\text{concat})$
+def multi_head_attention(X: Tensor, n_heads: int) -> Tensor:
+    # X: [batch, seq_len, embed_dim]
+    batch, seq_len, embed_dim = X.shape
+    d_k = embed_dim // n_heads
+
+    # Project inputs to Q, K, V
+    Q = X @ W_Q  # [batch, seq_len, embed_dim]
+    K = X @ W_K  # [batch, seq_len, embed_dim]
+    V = X @ W_V  # [batch, seq_len, embed_dim]
+
+    # Reshape to separate heads: [batch, seq_len, embed_dim] -> [batch, n_heads, seq_len, d_k]
+    Q = Q.view(batch, seq_len, n_heads, d_k).transpose(1, 2)
+    K = K.view(batch, seq_len, n_heads, d_k).transpose(1, 2)
+    V = V.view(batch, seq_len, n_heads, d_k).transpose(1, 2)
+
+    # Compute attention for each head (in parallel via batched operations)
+    # attn_output: [batch, n_heads, seq_len, d_k]
+    attn_output = scaled_dot_product_attention(Q, K, V)
+
+    # Concatenate heads: [batch, n_heads, seq_len, d_k] -> [batch, seq_len, embed_dim]
+    attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, embed_dim)
+
+    # Final output projection lets heads interact
+    output = attn_output @ W_O  # [batch, seq_len, embed_dim]
+    return output
 \end{pseudocode}
 
 \begin{keyconcept}
-  The reshaping pattern is:
+  The reshaping pattern is the key to understanding multi-head attention:
   \begin{itemize}
     \item \textbf{Split}: $[\text{batch}, \text{seq}, \text{embed}] \rightarrow
           [\text{batch}, h, \text{seq}, d_k]$
     \item \textbf{Attend}: each head computes scaled dot-product attention
+          independently
     \item \textbf{Concat}: $[\text{batch}, h, \text{seq}, d_k] \rightarrow
           [\text{batch}, \text{seq}, \text{embed}]$
   \end{itemize}
   The output projection $W_O$ is essential---without it, heads cannot
-  interact and mix information.
+  interact and mix information. Removing $W_O$ would mean the concatenated
+  heads are simply stacked side-by-side with no cross-head communication.
 \end{keyconcept}
+
+Why not just use a single head with a larger dimension? The answer is
+expressiveness. With $h$ heads, each of dimension $d_k = d_{\text{model}}/h$,
+the model learns $h$ different attention patterns in parallel. Empirically,
+multi-head attention significantly outperforms single-head attention at the
+same total dimensionality.
 
 \section{Attention as Soft Dictionary Lookup}
 
-Attention can be viewed as a \emph{differentiable dictionary}:
-\begin{itemize}
-  \item \textbf{Keys} are dictionary entries (labels)
-  \item \textbf{Queries} are what you're looking for
-  \item \textbf{Values} are the contents stored at each entry
-  \item The softmax produces a \emph{soft} lookup that returns a
-        weighted combination of values
-\end{itemize}
+The Q/K/V formulation can be understood through the lens of a \emph{soft
+dictionary}: a differentiable generalization of a hash table or database
+lookup.
 
-Untrained attention (using random or static embeddings) produces
-noisy, unstructured patterns. Learned attention captures meaningful
-syntactic and semantic relationships.
+In a regular dictionary, you provide a query and get back the value associated
+with the single key that exactly matches. Attention performs a ``soft'' version
+of this: the query is compared to all keys simultaneously, and the result is
+a weighted combination of all values, where the weight for each value is
+proportional to how well its key matches the query.
+
+\begin{keyconcept}[Concrete example: soft dictionary lookup]
+  Consider a sentence: ``The \textbf{cat} sat on the \textbf{mat} because it
+  was tired.'' When computing attention for the pronoun ``it'':
+  \begin{itemize}
+    \item The \textbf{query} from ``it'' encodes: ``I need to resolve this
+          reference---what does `it' refer to?''
+    \item The \textbf{keys} for ``cat'' and ``mat'' encode descriptions of
+          each noun (animacy, syntactic role, etc.).
+    \item The \textbf{values} carry the semantic content of each noun.
+    \item Because ``cat'' is animate and ``mat'' is not, the learned key for
+          ``cat'' will better match the query from ``it'' (which expects an
+          animate referent). The softmax will assign higher weight to ``cat'',
+          and the output at position ``it'' will be dominated by ``cat'''s
+          value.
+  \end{itemize}
+  This is a learned, soft lookup---the model discovers these patterns from data.
+\end{keyconcept}
+
+In a standard dictionary, the lookup returns exactly one value (hard match).
+Attention returns a distribution over values (soft match). This softness is
+what makes attention differentiable: the gradients flow through all
+value contributions proportionally to their attention weights.
 
 \begin{keyconcept}
   \textbf{Layer depth matters}: early layers tend to capture local
   syntactic patterns (e.g., attending to adjacent words), while later
-  layers capture broader semantic relationships (e.g., attending to
-  related concepts across the sequence).
+  layers capture broader semantic relationships (e.g., resolving pronoun
+  references across long distances). This progression emerges naturally
+  from training---the model learns that local patterns are easiest to model
+  first and gradually builds up to longer-range dependencies.
 \end{keyconcept}
 
 \section{\texorpdfstring{$O(n^2)$}{O(n²)} Complexity and Modern Solutions}
 
-The attention matrix is $n \times n$, giving:
+The attention matrix is $n \times n$, where $n$ is the sequence length. This
+gives:
 \begin{itemize}
-  \item \textbf{Time}: $O(n^2 d)$ for computing attention scores
+  \item \textbf{Time}: $O(n^2 d)$ for computing attention scores (every pair of
+        positions, each with a $d$-dimensional dot product)
   \item \textbf{Space}: $O(n^2)$ for storing the attention matrix
 \end{itemize}
 
-For a 128K-token context, that's $\sim$16 billion entries per attention
-matrix. Modern solutions include:
+For a 128K-token context, that is approximately 16 billion entries per attention
+matrix, multiplied by the number of layers and heads. This quadratic scaling is
+the primary bottleneck for long-context models.
+
+To put this in perspective: a single attention layer with $n = 128{,}000$ tokens
+requires $\sim\!128000^2 = 16.4$ billion floating-point values for the attention
+matrix alone, consuming about 64~GB of memory (in float32). With multiple layers
+and heads, long-context inference becomes prohibitively expensive without
+optimization.
+
+Modern solutions include:
 
 \begin{center}
 \begin{tabular}{ll}
@@ -141,6 +349,28 @@ Linear Attention & Approximates softmax for $O(n)$ complexity \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+\begin{keyconcept}
+  \textbf{KV Cache} is perhaps the most impactful practical optimization.
+  During autoregressive generation, each new token must attend to all previous
+  tokens. Without caching, this means recomputing the keys and values for all
+  previous positions at every step. With caching, the keys and values for
+  previous positions are stored and only the new position's K/V are computed.
+  This reduces the per-step cost from $O(n^2)$ to $O(n)$ during generation
+  (though training still requires the full $O(n^2)$ computation).
+
+  \textbf{Grouped Query Attention (GQA)} reduces the memory bottleneck by
+  sharing keys and values across multiple query heads. Instead of $h$ separate
+  KV pairs, GQA uses $g < h$ groups, each sharing one KV pair. This reduces
+  the KV cache size by a factor of $h/g$.
+
+  \textbf{Flash Attention} is an IO-aware algorithm that avoids materializing
+  the full $n \times n$ attention matrix in GPU global memory. It computes
+  attention in tiles, keeping partial results in faster SRAM. The algorithmic
+  complexity remains $O(n^2)$, but the wall-clock time is dramatically
+  reduced because it avoids the bottleneck of writing and reading the massive
+  attention matrix from slow memory.
+\end{keyconcept}
 
 \section*{Review Questions}
 
@@ -161,3 +391,109 @@ Linear Attention & Approximates softmax for $O(n)$ complexity \\
   Assuming 12 layers and 12 heads per layer, how many $n \times n$
   attention matrices are computed during a single forward pass?
 \end{reviewquestion}
+
+\begin{reviewquestion}[4]
+  Explain the difference between simplified self-attention and scaled
+  dot-product attention. What do the learnable Q/K/V projections provide
+  that raw embeddings cannot?
+\end{reviewquestion}
+
+\begin{reviewquestion}[5]
+  In the causal mask, position $i$ is allowed to attend to position $j$
+  when $j \leq i$. Why is the condition $j \leq i$ rather than $j < i$?
+  What would happen if a position could not attend to itself?
+\end{reviewquestion}
+
+\begin{reviewquestion}[6]
+  Using the database analogy, explain what the query, key, and value
+  represent. Why is the result of attention a ``soft'' lookup rather
+  than a ``hard'' lookup?
+\end{reviewquestion}
+
+\begin{reviewquestion}[7]
+  Suppose you have a 6-token sequence and multi-head attention with
+  3 heads and $d_{\text{model}} = 48$. What is the dimension of each
+  head's Q, K, and V? What is the shape of the attention score matrix
+  for a single head?
+\end{reviewquestion}
+
+\begin{reviewquestion}[8]
+  Why does \texttt{masked\_fill} with $-\infty$ produce the correct
+  causal mask, while multiplying by 0 could cause numerical issues?
+  Explain with a concrete edge case.
+\end{reviewquestion}
+
+\begin{reviewquestion}[9]
+  How does attention address the two main limitations of RNNs
+  (sequential processing bottleneck and difficulty with long-range
+  dependencies)?
+\end{reviewquestion}
+
+\begin{reviewquestion}[10]
+  In multi-head attention, each head operates on dimension $d_k =
+  d_{\text{model}} / h$. If you doubled the number of heads while
+  keeping $d_{\text{model}}$ fixed, how would this affect the total
+  number of parameters and the per-head computational cost?
+\end{reviewquestion}
+
+\begin{reviewquestion}[11]
+  Explain how the KV cache works during autoregressive generation.
+  Why does it reduce the per-step cost from $O(n^2)$ to $O(n)$?
+\end{reviewquestion}
+
+\begin{reviewquestion}[12]
+  Grouped Query Attention (GQA) shares KV pairs across groups of query
+  heads. Explain the tradeoff: what does GQA save, and what might it
+  sacrifice?
+\end{reviewquestion}
+
+\section*{Problems}
+
+\begin{problem}[1]
+  \textbf{Simplified Self-Attention from Scratch.}
+  Implement simplified self-attention using only basic tensor operations
+  (matrix multiplication and softmax---no \texttt{nn.Module} or learned
+  parameters). Your function should take an input tensor of shape
+  $[\text{seq\_len}, \text{embed\_dim}]$ and return an output tensor of the
+  same shape. Verify that each row of the attention weight matrix sums to 1.
+\end{problem}
+
+\begin{problem}[2]
+  \textbf{Scaled Dot-Product Attention.}
+  Implement scaled dot-product attention with learnable $W_Q$, $W_K$, $W_V$
+  projections as \texttt{nn.Linear} modules. Write a function
+  \texttt{scaled\_dot\_product\_attention(Q, K, V)} that computes
+  $\text{softmax}(QK^\top / \sqrt{d_k})V$. Verify that removing the
+  $\sqrt{d_k}$ scaling causes softmax to produce near-one-hot vectors
+  for large $d_k$ (e.g., $d_k = 256$).
+\end{problem}
+
+\begin{problem}[3]
+  \textbf{Causal Masking.}
+  Add causal masking to your scaled dot-product attention implementation.
+  Create a boolean upper-triangular mask using \texttt{torch.triu} and
+  apply it with \texttt{masked\_fill}. Feed a sequence of 8 tokens and
+  verify that position $i$ in the output depends only on positions
+  $0, 1, \ldots, i$ by checking that setting a future token to a
+  different value does not change the output at position $i$.
+\end{problem}
+
+\begin{problem}[4]
+  \textbf{Multi-Head Attention.}
+  Implement multi-head attention by extending your single-head
+  implementation. Use the reshape--transpose pattern to split the
+  embedding dimension into $h$ heads, compute attention in parallel,
+  and concatenate and project the result with $W_O$. Test with
+  \texttt{embed\_dim = 48} and \texttt{n\_heads = 3}, verifying the
+  output shape is $[\text{batch}, \text{seq\_len}, \text{embed\_dim}]$.
+\end{problem}
+
+\begin{problem}[5]
+  \textbf{Attention Complexity Experiment.}
+  Measure the wall-clock time of your multi-head attention implementation
+  for sequence lengths $[128, 256, 512, 1024, 2048]$. Plot time vs.\
+  sequence length. Does the empirical curve match the theoretical
+  $O(n^2)$ prediction? How does the memory usage scale? Use
+  \texttt{torch.cuda.max\_memory\_allocated()} if a GPU is available,
+  or estimate memory from the size of the attention matrix.
+\end{problem}

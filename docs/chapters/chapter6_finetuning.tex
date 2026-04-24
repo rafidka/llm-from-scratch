@@ -1,82 +1,272 @@
 \chapter{Fine-Tuning}
 
+Pretrained language models are impressively capable, but they are also
+general-purpose: a model trained on internet-scale text can generate
+plausible continuations for any prompt, but it cannot follow
+instructions, answer questions, or classify sentiment out of the box.
+Fine-tuning is the process of adapting a pretrained model to a specific
+downstream task or behavior. In this chapter, we cover the core
+techniques for fine-tuning: adding classification heads, instruction
+fine-tuning with masked loss, attention masks, length-grouped batching,
+gradient checkpointing, and parameter-efficient fine-tuning via LoRA.
+
 \section{Classification Head}
 
-For classification tasks (e.g., sentiment analysis), replace the LM
-head with a linear classification head:
+Many NLP tasks can be framed as classification: sentiment analysis
+(positive/negative), topic categorization, spam detection, and so on.
+When adapting a language model for classification, we replace the
+language-model head---which projects hidden states to vocabulary-sized
+logits---with a smaller linear layer that maps to the number of
+classes.
+
+\subsection{From Next-Token Prediction to Classification}
+
+During pretraining, the model learns rich representations of text. The
+final hidden states encode semantic information that is useful far
+beyond next-token prediction. For classification, we extract a single
+vector from the sequence of hidden states and feed it into a
+classification head:
 
 \[
   \hat{y} = \text{softmax}\!\left(W_{\text{cls}} \cdot h_{\text{last}} + b_{\text{cls}}\right)
 \]
 
-where $h_{\text{last}}$ is the hidden state of the \textbf{last token}
-in the sequence.
+where $h_{\text{last}} \in \mathbb{R}^{d_{\text{model}}}$ is the hidden
+state at a chosen position, $W_{\text{cls}} \in \mathbb{R}^{n_{\text{classes}} \times d_{\text{model}}}$,
+and $b_{\text{cls}} \in \mathbb{R}^{n_{\text{classes}}}$.
 
 \begin{keyconcept}
-  Why the last token? In causal attention, the last token has attended
-  to all preceding tokens, making its hidden state a summary of the
-  entire sequence. This is analogous to the \texttt{[CLS]} token in
-  BERT, but we don't need a special token---the last position naturally
-  accumulates information.
+  Why the last token? In causal (autoregressive) attention, every token
+  can only attend to itself and preceding tokens. The last token has
+  attended to \emph{all} preceding tokens, making its hidden state a
+  summary of the entire sequence. This is analogous to the
+  \texttt{[CLS]} token in BERT, but we don't need a special
+  token---the last position naturally accumulates information from the
+  full sequence.
+
+  During pretraining, the model is trained so that the last token's
+  hidden state predicts the next token given the entire context. This
+  forces the last token to encode a compressed representation of
+  everything it has seen, which transfers well to classification.
 \end{keyconcept}
+
+\begin{pseudocode}[Classification Forward Pass]
+def classify(input_ids: Tensor,       # [batch, seq_len]
+             model: GPTModel,
+             cls_head: Linear,          # Linear(embed_dim, num_classes)
+             pad_id: int) -> Tensor:    # [batch, seq_len]
+    # Run full model to get hidden states
+    hidden = model(input_ids)           # [batch, seq_len, embed_dim]
+
+    # Find the last non-padding token for each sequence
+    # attention_mask is 1 for real tokens, 0 for padding
+    mask = (input_ids != pad_id)        # [batch, seq_len]
+    # argmax finds the last True position (since seq is 0-indexed left-to-right)
+    last_idx = mask.int().argmax(dim=1)  # [batch]
+    # Gather the hidden state at the last real token
+    last_hidden = hidden.gather(           # [batch, embed_dim]
+        1, last_idx.unsqueeze(-1).expand(-1, hidden.size(-1))
+    ).squeeze(1)
+    # Classify
+    logits = cls_head(last_hidden)        # [batch, num_classes]
+    return logits
+\end{pseudocode}
+
+\begin{keyconcept}
+  An important detail: when sequences are padded, we must extract the
+  hidden state of the \emph{last real token}, not the last position in
+  the tensor (which may be a padding token whose hidden state is
+  meaningless). The code above uses the attention mask to locate this
+  position.
+\end{keyconcept}
+
+\subsection{Training the Classification Head}
+
+When fine-tuning for classification, there is a design choice: should
+we update the pretrained weights, or freeze them and only train the
+classification head?
+
+\begin{itemize}
+  \item \textbf{Frozen backbone}: Only $W_{\text{cls}}$ and
+        $b_{\text{cls}}$ are updated. Works well when the pretrained
+        model already encodes good features and the downstream task is
+        simple. Also much faster and uses less memory.
+  \item \textbf{Fine-tuning all weights}: The entire model is updated.
+        Better for complex tasks that require adapting internal
+        representations, but risks overfitting on small datasets and
+        requires more memory.
+  \item \textbf{Gradual unfreezing}: Start with a frozen backbone and
+        progressively unfreeze layers from the top. A common compromise.
+\end{itemize}
 
 \section{Instruction Fine-Tuning and Masked Loss}
 
-For instruction fine-tuning, we format data as:
+A pretrained language model generates text unconditionally---it does not
+understand the concept of following instructions or engaging in
+multi-turn conversation. Instruction fine-tuning teaches the model to
+respond to structured prompts by training on examples formatted as
+instruction--response pairs.
+
+\subsection{Data Format}
+
+Each training example is formatted as:
 
 \begin{center}
-\texttt{<prompt>Instruction here\textbar\textbar<Response here<|eos|>}
+\texttt{<prompt>Instruction here<|separator|>Response here<|eos|>}
 \end{center}
 
-We want to compute loss \emph{only} on the response tokens, not the
-prompt. This is achieved via \texttt{ignore\_index = -100} in
-\texttt{CrossEntropyLoss}:
+The prompt portion provides context and instructions, and the response
+is the desired output. During training, we want the model to learn to
+\emph{generate the response}, not to copy the prompt. This means we
+must compute loss only on the response tokens.
+
+\subsection{Masked Targets}
+
+PyTorch's \texttt{CrossEntropyLoss} supports an \texttt{ignore\_index}
+parameter---any position in the target labeled with this index
+contributes zero to the loss. By convention, \texttt{ignore\_index =
+-100}. We set prompt tokens and padding tokens to $-100$ in the target
+tensor:
 
 \[
   \mathcal{L} = -\frac{1}{|\{i : t_i \neq -100\}|}\sum_{i:\, t_i \neq -100} \log P(t_i \mid \text{context})
 \]
 
+\begin{pseudocode}[Constructing Masked Targets for Instruction Fine-Tuning]
+def build_masked_targets(input_ids: Tensor,       # [batch, seq_len]
+                          prompt_lengths: Tensor,   # [batch]
+                          pad_id: int,
+                          eos_id: int) -> Tensor:   # [batch, seq_len]
+    # Start with all positions masked
+    targets = torch.full_like(input_ids, -100)  # [batch, seq_len]
+
+    for i in range(input_ids.size(0)):
+        prompt_len = prompt_lengths[i].item()
+        # Copy response tokens (after prompt separator) into targets
+        # Shift by 1: target at position t is the token at position t+1
+        targets[i, prompt_len:-1] = input_ids[i, prompt_len + 1:]
+        # Mask padding positions in the response
+        # Find where real tokens end (excluding eos)
+        response = input_ids[i, prompt_len:]
+        real_len = (response != pad_id).sum().item()
+        # Any remaining positions after real_len are already -100
+        # and eos_id position is kept as a valid target
+
+    # Also mask padding positions (where input_ids == pad_id)
+    targets[input_ids == pad_id] = -100
+
+    return targets  # [batch, seq_len] with -100 for prompt and padding
+\end{pseudocode}
+
 \begin{keyconcept}
   Padding tokens also use \texttt{ignore\_index = -100} so they don't
   contribute to loss. The \texttt{-100} value is PyTorch's convention
-  for ``ignore this position.''
+  for ``ignore this position.'' This is more memory-efficient than a
+  separate binary mask because it reuses the target tensor itself.
+
+  Two types of tokens are masked: (1) prompt tokens, because we don't
+  want the model to learn to predict the user's instructions, and (2)
+  padding tokens, because they carry no semantic content.
 \end{keyconcept}
 
 \section{Attention Masks}
 
-When sequences in a batch have different lengths, shorter sequences
-are padded. Attention masks tell the model which positions are real
-tokens and which are padding:
+When sequences in a batch have different lengths, shorter sequences are
+padded to match the longest sequence in the batch. Attention masks tell
+the model which positions contain real tokens and which are padding:
 
-\begin{pseudocode}[Creating Attention Masks]
-attention\_mask $\leftarrow$ (input\_ids $\neq$ padding\_token\_id)\\[3pt]
-$\triangleright$ Shape: [batch, seq\_len], dtype: bool\\
-$\triangleright$ Before attention:\\
-scores $\leftarrow$ scores.masked\_fill($\neg$attention\_mask, $-\infty$)
+\begin{pseudocode}[Creating and Applying Attention Masks]
+def apply_attention_mask(scores: Tensor,       # [batch, num_heads, seq_len, seq_len]
+                          input_ids: Tensor,    # [batch, seq_len]
+                          pad_id: int) -> Tensor:  # [batch, num_heads, seq_len, seq_len]
+    # Create mask: True for real tokens, False for padding
+    mask = (input_ids != pad_id)              # [batch, seq_len]
+
+    # Expand mask for multi-head attention:
+    # [batch, seq_len] -> [batch, 1, 1, seq_len]
+    # Broadcasting will replicate across num_heads and query positions
+    mask = mask.unsqueeze(1).unsqueeze(2)      # [batch, 1, 1, seq_len]
+
+    # Apply: set padding positions to -inf before softmax
+    # This makes padding tokens get zero attention weight
+    scores = scores.masked_fill(~mask, float('-inf'))
+
+    return scores  # [batch, num_heads, seq_len, seq_len]
 \end{pseudocode}
 
 \begin{keyconcept}
   The attention mask is expanded from $[\text{batch}, \text{seq}]$ to
-  $[\text{batch}, 1, \text{seq}]$ before being applied to the
+  $[\text{batch}, 1, 1, \text{seq}]$ before being applied to the
   $[\text{batch}, \text{heads}, \text{seq}, \text{seq}]$ attention
-  scores. Broadcasting replicates it across all heads and query
+  scores. Broadcasting replicates it across all heads and all query
   positions.
 
-  During generation, the attention mask must \emph{grow} alongside
-  the token sequence---each new token gets a mask value of 1 (real).
+  During generation (autoregressive decoding), the attention mask must
+  \emph{grow} alongside the token sequence---each newly generated token
+  gets a mask value of 1 (real). This is handled by concatenating a new
+  column of ones to the mask at each generation step.
 \end{keyconcept}
 
 \section{Length-Grouped Batching}
 
-When instruction fine-tuning with variable-length sequences:
+Instruction fine-tuning datasets contain sequences of widely varying
+lengths. If we naively group random sequences into batches, each batch
+must be padded to the length of its longest sequence. A batch containing
+one sequence of 900 tokens and seven sequences of 50 tokens wastes
+$850 \times 7 = 5{,}950$ padding positions.
+
+\subsection{Grouping by Length}
+
+The solution is to sort sequences by length (with added noise for
+randomization) and then group similar-length sequences together into
+batches. Short sequences go into one batch, long sequences into
+another---each batch is padded only to its own maximum, not the global
+maximum.
 
 \begin{pseudocode}[Length-Grouped Batching]
-Sort examples by sequence length (with noise for randomization)\\
-Group similar-length examples into batches\\
-\textbf{for} each batch:\\
-\quad batch\_size $\leftarrow$ max\_tokens / max\_seq\_len\_in\_batch\\
-\quad Pad sequences to longest in batch (not global max)\\
-Shuffle batch order to prevent length-biased training
+def create_length_grouped_batches(
+        examples: list[dict],          # Each has "input_ids" and "target"
+        max_tokens: int,                # Max tokens per batch (GPU memory budget)
+        noise_factor: float = 0.05      # Noise as fraction of max length
+    ) -> list[list[dict]]:
+    # Add noise to lengths for randomization within groups
+    lengths = [len(ex["input_ids"]) for ex in examples]
+    max_len = max(lengths)
+    noisy_lengths = [
+        l + int(noise_factor * max_len * random())
+        for l in lengths
+    ]
+    # Sort by noisy length
+    sorted_examples = sorted(
+        zip(noisy_lengths, examples), key=lambda x: x[0]
+    )
+    examples = [ex for _, ex in sorted_examples]
+
+    # Group into batches respecting token budget
+    batches = []
+    current_batch = []
+    current_max_len = 0
+
+    for ex in examples:
+        seq_len = len(ex["input_ids"])
+        # Check if adding this example would exceed token budget
+        # New batch size * new max length must fit in budget
+        new_max_len = max(current_max_len, seq_len)
+        new_batch_size = len(current_batch) + 1
+        if new_batch_size * new_max_len <= max_tokens:
+            current_batch.append(ex)
+            current_max_len = new_max_len
+        else:
+            batches.append(current_batch)
+            current_batch = [ex]
+            current_max_len = seq_len
+
+    if current_batch:
+        batches.append(current_batch)
+
+    # Shuffle batch order to prevent length-biased gradient updates
+    shuffle(batches)
+    return batches
 \end{pseudocode}
 
 \begin{keyconcept}
@@ -85,30 +275,101 @@ Shuffle batch order to prevent length-biased training
   short and long sequences go into separate batches, minimizing padding.
 
   Dynamic batch sizing by token budget (not fixed batch size) is what
-  actually prevents OOM: fewer long sequences per batch, more short ones.
+  actually prevents OOM: fewer long sequences per batch, more short
+  ones. A batch of eight 50-token sequences uses 400 tokens, while a
+  batch of two 900-token sequences uses 1{,}800 tokens---both fit within
+  a 2{,}048-token budget, but with very different batch sizes.
+
+  The noise factor prevents the model from seeing perfectly sorted data
+  every epoch, which could introduce subtle biases.
 \end{keyconcept}
 
 \section{Gradient Checkpointing}
 
-\begin{keyconcept}
-  Instead of storing all activations for backprop, gradient checkpointing
-  stores only activations at checkpoint boundaries and recomputes the
-  rest during the backward pass.
+During the forward pass, a neural network computes intermediate
+activations and stores them in memory for use during backpropagation.
+For a Transformer with $L$ layers, these stored activations scale as
+$O(L \cdot B \cdot S \cdot D)$, where $B$ is the batch size, $S$ is
+the sequence length, and $D$ is the hidden dimension. For large models,
+this activation memory can be the dominant memory cost---often larger
+than the model weights themselves.
 
-  \textbf{Tradeoff}: $\sim$30\% slower forward+backward, but memory
-  savings are dramatic. On GPT-2 Large (36 layers):
+\subsection{How Checkpointing Works}
+
+Gradient checkpointing reduces activation memory by not storing
+intermediate activations for every layer. Instead, it stores only
+``checkpoint'' activations at selected layer boundaries. During the
+backward pass, when gradients are needed for a non-checkpointed layer,
+the forward computation from the nearest checkpoint is re-executed to
+recompute the required activations.
+
+\begin{pseudocode}[Gradient Checkpointing for Transformer Blocks]
+def forward_with_checkpointing(
+        x: Tensor,                 # [batch, seq_len, embed_dim]
+        blocks: list[TransformerBlock],
+        checkpoint_segments: int = 3  # Number of checkpoint boundaries
+    ) -> Tensor:
+    # Divide blocks into segments; only store activations at boundaries
+    blocks_per_segment = len(blocks) // checkpoint_segments
+
+    # Forward pass with checkpointing
+    for seg in range(checkpoint_segments):
+        start = seg * blocks_per_segment
+        end = start + blocks_per_segment
+        segment_blocks = blocks[start:end]
+
+        def run_segment(x: Tensor, seg_blocks=segment_blocks) -> Tensor:
+            # This function will be re-run during backward if needed
+            for block in seg_blocks:
+                x = block(x)      # [batch, seq_len, embed_dim]
+            return x
+
+        # checkpoint() stores only the input x for this segment
+        # During backward, it re-runs run_segment to recompute activations
+        x = torch.utils.checkpoint.checkpoint(
+            run_segment, x, use_reentrant=False
+        )  # [batch, seq_len, embed_dim]
+
+    # Process any remaining blocks (if not evenly divisible)
+    for block in blocks[checkpoint_segments * blocks_per_segment:]:
+        x = block(x)              # [batch, seq_len, embed_dim]
+
+    return x
+\end{pseudocode}
+
+\begin{keyconcept}
+  \textbf{Tradeoff}: Gradient checkpointing trades compute for memory.
+  By recomputing activations during the backward pass, it saves
+  $\sim$55--65\% of activation memory at the cost of $\sim$30\% slower
+  training (due to the extra forward passes). On GPT-2 Large (36
+  layers):
+
   \begin{center}
   73 GB $\rightarrow$ 33 GB ($\sim$55\% reduction)
   \end{center}
 
-  Implementation: wrap each TransformerBlock in
-  \texttt{torch.utils.checkpoint.checkpoint()} with
-  \texttt{use\_reentrant=False}.
+  The number of checkpoint segments controls the tradeoff: more segments
+  means more recomputation but less memory. With a single checkpoint
+  per layer (the finest granularity), memory scales as $O(\sqrt{L})$
+  instead of $O(L)$. In practice, checkpointing every few layers is
+  sufficient.
 \end{keyconcept}
 
 \section{LoRA (Low-Rank Adaptation)}
 
-LoRA freezes the original weights and adds trainable low-rank matrices:
+Fine-tuning all parameters of a large language model is expensive: the
+full model must be loaded into memory, and optimizer states (Adam
+maintains two additional tensors per parameter) can triple the memory
+requirement. LoRA (Low-Rank Adaptation) is a parameter-efficient
+fine-tuning method that freezes the original weights and adds small
+trainable low-rank matrices, dramatically reducing the number of
+trainable parameters while maintaining performance comparable to full
+fine-tuning.
+
+\subsection{The Low-Rank Decomposition}
+
+LoRA applies a low-rank update to a pretrained weight matrix $W$. The
+forward pass becomes:
 
 \[
   h = Wx + \frac{\alpha}{r} BAx
@@ -125,16 +386,106 @@ where:
   \item $\alpha$ is the scaling factor; effective scaling is $\alpha / r$
 \end{itemize}
 
+\subsection{Why Low Rank Works: A Concrete Example}
+
+Consider a weight matrix $W \in \mathbb{R}^{768 \times 768}$ from
+GPT-2 Small, with a LoRA rank of $r = 4$:
+
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Parameter} & \textbf{Shape} & \textbf{Count} \\
+\midrule
+$W$ (frozen) & $768 \times 768$ & 589{,}824 \\
+$A$ (trainable) & $4 \times 768$ & 3{,}072 \\
+$B$ (trainable) & $768 \times 4$ & 3{,}072 \\
+LoRA update ($BA$) & $768 \times 768$ (implicit) & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The update $BA$ produces a $768 \times 768$ matrix, but it is
+constrained to lie in a 4-dimensional subspace---it has rank at most 4.
+The full matrix $W$ has rank 768 (typically), so the LoRA update can
+only modify the output along 4 directions. Yet this is enough: the
+pretrained model is already close to a good solution, and fine-tuning
+requires only small adjustments that tend to be low-rank.
+
+The parameter savings are stark: 6{,}144 trainable parameters for the
+LoRA adapter versus 589{,}824 for full fine-tuning of this single
+matrix---a $\sim$96$\times$ reduction. Across all attention weight
+matrices in GPT-2 Small (12 layers $\times$ 4 matrices each), the
+total LoRA parameters are roughly 294K versus 780M for full
+fine-tuning.
+
+\subsection{Forward Pass}
+
+\begin{pseudocode}[LoRA Linear Layer Forward Pass]
+class LoRALinear(nn.Module):
+    def __init__(self, in_dim: int, out_dim: int, rank: int, alpha: float):
+        super().__init__()
+        # Frozen pretrained weight
+        self.W = nn.Linear(in_dim, out_dim, bias=False)
+        self.W.weight.requires_grad_(False)
+
+        # LoRA low-rank matrices
+        self.lora_A = nn.Parameter(torch.randn(rank, in_dim) * 0.02)
+        self.lora_B = nn.Parameter(torch.zeros(out_dim, rank))
+        self.scaling = alpha / rank
+
+    def forward(self, x: Tensor) -> Tensor:  # x: [batch, seq_len, in_dim]
+        # Pretrained path (frozen)
+        h_pretrained = self.W(x)              # [batch, seq_len, out_dim]
+
+        # LoRA path: x -> A -> B (low-rank bottleneck)
+        # Process sequence dimension with matrix operations
+        h_lora = x @ self.lora_A.T             # [batch, seq_len, rank]
+        h_lora = h_lora @ self.lora_B.T         # [batch, seq_len, out_dim]
+
+        # Combine with scaling
+        return h_pretrained + self.scaling * h_lora  # [batch, seq_len, out_dim]
+\end{pseudocode}
+
 \begin{keyconcept}
   \textbf{Why $B$ is zero-initialized}: At the start of fine-tuning,
   $BA = 0$ so $h = Wx$, meaning the model behaves exactly like the
-  pretrained model. The LoRA update grows from zero.
+  pretrained model. The LoRA update grows from zero, ensuring a smooth
+  transition from the pretrained model's behavior.
+
+  If $B$ were randomly initialized, the initial output would be $h =
+  Wx + \frac{\alpha}{r}BAx$, introducing a large random perturbation
+  that could destabilize training and temporarily degrade the model's
+  capabilities.
 
   \textbf{Practical impact}: LoRA reduces trainable parameters from
   $\sim$780M to $\sim$6M on GPT-2 Large. The main savings come from
   eliminating optimizer states (Adam stores 2 extra tensors per
-  parameter) and gradients for frozen weights.
+  parameter) and gradients for frozen weights. With LoRA, optimizer
+  state memory scales with the number of \emph{trainable} parameters,
+  not the total model size.
+
+  \textbf{Merging for deployment}: At inference time, the LoRA weights
+  can be merged into the original weights: $W' = W + \frac{\alpha}{r}
+  BA$. After merging, there is no additional cost compared to a fully
+  fine-tuned model---same latency, same memory.
 \end{keyconcept}
+
+\subsection{Which Layers to Apply LoRA To}
+
+LoRA is typically applied to the attention weight matrices ($W_Q$,
+$W_K$, $W_V$, $W_O$) and sometimes the feed-forward layers. Empirical
+results show that:
+
+\begin{itemize}
+  \item Applying LoRA to all four attention matrices ($W_Q, W_K, W_V,
+        W_O$) generally outperforms applying it to only $W_Q$ and
+        $W_V$.
+  \item Applying LoRA to feed-forward layers in addition to attention
+        brings marginal improvement at the cost of more parameters.
+  \item The rank $r$ is typically set between 4 and 64. Ranks of 8--16
+        often provide a good balance between expressiveness and
+        efficiency for instruction fine-tuning.
+\end{itemize}
 
 \section*{Review Questions}
 
@@ -154,3 +505,112 @@ where:
   fine-tuning. What would happen if $B$ were randomly initialized
   instead?
 \end{reviewquestion}
+
+\begin{reviewquestion}[4]
+  In classification fine-tuning, why do we extract the hidden state of
+  the last real token rather than the last position in the tensor? What
+  would happen if we used the last position in a padded sequence?
+\end{reviewquestion}
+
+\begin{reviewquestion}[5]
+  Explain the tradeoff made by gradient checkpointing. If you
+  checkpoint every $k$ layers in a 24-layer model, approximately how
+  many times is each layer's forward pass executed during one training
+  iteration?
+\end{reviewquestion}
+
+\begin{reviewquestion}[6]
+  For a $1024 \times 768$ weight matrix with LoRA rank $r = 8$ and
+  $\alpha = 16$, compute the number of trainable parameters in the LoRA
+  adapter. What is the effective scaling factor $\alpha / r$?
+\end{reviewquestion}
+
+\begin{reviewquestion}[7]
+  Why does causal attention make the last token's hidden state a good
+  representation for classification? Contrast this with BERT-style
+  bidirectional attention.
+\end{reviewquestion}
+
+\begin{reviewquestion}[8]
+  When building masked targets for instruction fine-tuning, the targets
+  are shifted by one position relative to the input. Explain why this
+  shift is necessary.
+\end{reviewquestion}
+
+\begin{reviewquestion}[9]
+  Describe how dynamic batch sizing based on a token budget prevents
+  out-of-memory errors during fine-tuning. Why can't we just use a
+  fixed batch size?
+\end{reviewquestion}
+
+\begin{reviewquestion}[10]
+  After LoRA fine-tuning, we can merge the LoRA weights into the
+  original weights via $W' = W + \frac{\alpha}{r}BA$. What is the
+  advantage of merging at deployment time? Is there any difference in
+  inference latency between merged and unmerged LoRA?
+\end{reviewquestion}
+
+\begin{reviewquestion}[11]
+  Gradient checkpointing reduces memory from $O(L)$ to $O(\sqrt{L})$
+  for $L$ layers (with per-layer checkpointing). Derive why the memory
+  scales as $O(\sqrt{L})$ when every layer is a checkpoint boundary.
+\end{reviewquestion}
+
+\begin{reviewquestion}[12]
+  In the LoRA forward pass, the computation goes through a bottleneck:
+  $x \to A \to B \to$ output, where $A$ is $r \times d_{\text{in}}$
+  and $B$ is $d_{\text{out}} \times r$. Explain why the rank $r$
+  controls the expressiveness of the LoRA update. What happens as $r
+  \to d_{\text{in}}$?
+\end{reviewquestion}
+
+\section*{Problems}
+
+\begin{problem}[1]
+  \textbf{Implement a classification fine-tuning loop.} Given a
+  pretrained GPT model, a classification head
+  (\texttt{nn.Linear(embed\_dim, num\_classes)}), and a dataset of
+  (text, label) pairs, implement the training loop that:
+  (a) extracts the last real token's hidden state, (b) computes
+  classification loss, (c) optionally freezes the backbone. Compare
+  validation accuracy with a frozen backbone vs.\ fine-tuning all
+  weights on a binary sentiment classification task.
+\end{problem}
+
+\begin{problem}[2]
+  \textbf{Implement masked targets for instruction fine-tuning.}
+  Write a function that takes a batch of tokenized instruction--response
+  pairs (with a separator token and padding) and returns the target
+  tensor with prompt and padding positions set to $-100$. Verify your
+  implementation by checking that: (a) the loss on a batch equals the
+  loss computed only on response tokens, and (b) padding tokens
+  contribute zero to the loss.
+\end{problem}
+
+\begin{problem}[3]
+  \textbf{Implement LoRA adapter layers.} Create a
+  \texttt{LoRALinear} module that wraps an existing \texttt{nn.Linear}
+  layer and adds the low-rank $A$ and $B$ matrices with configurable
+  rank $r$ and scaling $\alpha$. Replace the attention weight matrices
+  in a GPT model with LoRA-wrapped versions. Verify that at
+  initialization, the LoRA model produces identical outputs to the
+  original model (since $B$ is zero-initialized).
+\end{problem}
+
+\begin{problem}[4]
+  \textbf{Implement length-grouped batching.} Given a list of
+  tokenized sequences of varying lengths, implement a dataloader that
+  sorts sequences by length (with a noise factor), groups them into
+  batches respecting a maximum token budget, and pads each batch to its
+  own maximum length. Measure the average padding waste per batch
+  compared to random batching.
+\end{problem}
+
+\begin{problem}[5]
+  \textbf{Implement gradient checkpointing.} Wrap each
+  \texttt{TransformerBlock} in a GPT model with
+  \texttt{torch.utils.checkpoint.checkpoint()} and measure: (a) peak
+  GPU memory with and without checkpointing, (b) training throughput
+  (tokens per second) with and without checkpointing. Report the
+  memory savings and the throughput reduction.
+\end{problem}

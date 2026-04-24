@@ -1,42 +1,177 @@
 \chapter{The GPT Architecture}
 
+Generative Pre-trained Transformers (GPT) are \emph{decoder-only} language models
+that generate text one token at a time. Unlike the original Transformer, which
+has both an encoder and a decoder for sequence-to-sequence tasks, GPT uses only
+the decoder stack: the model reads the entire input sequence through
+\emph{causal} (masked) self-attention, where each position can attend to itself
+and all prior positions but not future ones. This autoregressive constraint makes
+GPT a natural fit for language modeling---predict the next token given all
+previous tokens.
+
+The architecture is remarkably uniform: a stack of identical \emph{transformer
+blocks}, each containing a multi-head self-attention layer and a position-wise
+feed-forward network, wrapped in residual connections and layer normalization.
+The same block is repeated $N$ times (12 for GPT-2 Small), with every block
+using the same design but independent learned parameters. This chapter walks
+through each component---embeddings, normalization, attention, the feed-forward
+network, and how they assemble into a complete model---before covering the
+strategies used at inference time to turn logits into coherent text.
+
 \section{Token and Positional Embeddings}
 
-Given a sequence of token IDs $[t_1, t_2, \ldots, t_n]$:
+A language model's input is a sequence of token IDs: integers that index into a
+fixed vocabulary. The first step is to convert these discrete IDs into
+continuous vector representations that the model can process. This is the role
+of \emph{embeddings}.
+
+\subsection{Token Embeddings}
+
+A token embedding is a lookup table---a matrix $E \in \mathbb{R}^{V \times d}$
+where $V$ is the vocabulary size and $d$ is the embedding dimension. Each row
+of this matrix is a $d$-dimensional vector corresponding to one token in the
+vocabulary. Given a token ID $t_i$, its embedding is simply:
+
+\[
+  \mathbf{e}_i = E[t_i] \in \mathbb{R}^{d}
+\]
+
+In PyTorch, this is implemented as \texttt{nn.Embedding(V, d)}, which
+internally stores the matrix $E$ and performs the lookup via integer indexing.
+The embedding vectors are initialized randomly (typically from
+$\mathcal{N}(0, 0.02)$) and then learned during training. Over the course of
+training, semantically similar tokens develop similar embedding vectors, since
+they appear in similar contexts.
+
+For GPT-2, $V = 50{,}257$ and $d = 768$ (for the Small variant), so the token
+embedding matrix contains $50{,}257 \times 768 \approx 38.6\text{M}$
+parameters---a significant fraction of the model's total parameters.
+
+\subsection{Positional Embeddings}
+
+Token embeddings alone are \emph{permutation-invariant}: the model cannot
+distinguish ``the cat sat'' from ``sat the cat'' because each token is mapped
+to the same vector regardless of where it appears. Without position information,
+the model degenerates into a bag-of-words model and cannot learn word order.
+
+GPT-2 uses \emph{learned} positional embeddings: another matrix
+$P \in \mathbb{R}^{L \times d}$, where $L$ is the maximum sequence length
+(1,024 for GPT-2). The positional embedding for position $i$ is:
+
+\[
+  \mathbf{p}_i = P[i] \in \mathbb{R}^{d}
+\]
+
+The final input representation for token $t_i$ at position $i$ is the
+\emph{sum} of the two embeddings:
 
 \[
   x_i = \text{Embed}_{\text{token}}(t_i) + \text{Embed}_{\text{pos}}(i)
 \]
 
 \begin{keyconcept}
-  Token embeddings convert discrete IDs to continuous vectors.
-  Positional embeddings give the model information about \emph{where}
-  each token appears---without them, the model is permutation-invariant
-  (bag-of-words).
+  \textbf{Why addition instead of concatenation?} Concatenating the token and
+  positional embeddings would require $2d$ dimensions, doubling the
+  downstream computation. Addition works because both embeddings live in the
+  same $\mathbb{R}^{d}$ space, and the model can learn to disentangle the
+  position signal from the token signal. You can think of each embedding
+  dimension as one ``register'' that stores a combination of token identity
+  and position, rather than devoting separate dimensions to each.
 
-  In GPT-2, both are learned \texttt{nn.Embedding} layers.
-  The vocabulary size is 50,257 and the maximum context length is 1,024.
+  Alternatively, the original Transformer used sinusoidal positional encodings
+  (fixed functions of position), while GPT-2 found that simply learning the
+  position embeddings from data works well. Some later models (e.g., Rotary
+  Position Embeddings / RoPE) encode position through multiplicative
+  interactions rather than additive ones.
 \end{keyconcept}
 
-\section{LayerNorm and Residual Connections}
+\begin{pseudocode}[Token and Positional Embeddings]
+class GPT2Embeddings(nn.Module):
+    def __init__(self, vocab_size: int, context_len: int, embed_dim: int):
+        self.tok_embed = nn.Embedding(vocab_size, embed_dim)
+        self.pos_embed = nn.Embedding(context_len, embed_dim)
+        self.drop = nn.Dropout(0.1)
 
-Each TransformerBlock uses \textbf{pre-norm} architecture:
+    def forward(self, token_ids: Tensor) -> Tensor:
+        # token_ids: [batch, seq_len]
+        seq_len = token_ids.size(1)
+        positions = torch.arange(seq_len, device=token_ids.device)
+        # positions: [seq_len]
+        x = self.tok_embed(token_ids) + self.pos_embed(positions)
+        # x: [batch, seq_len, embed_dim]
+        return self.drop(x)
+\end{pseudocode}
+
+\section{Layer Normalization}
+
+Deep neural networks suffer from \emph{internal covariate shift}: the
+distribution of activations changes across layers, making training unstable.
+Layer normalization (LayerNorm) addresses this by normalizing the activations
+across the feature dimension of each token independently.
+
+Given an input vector $\mathbf{x} \in \mathbb{R}^{d}$, LayerNorm computes:
 
 \[
-  \text{out} = x + \text{Dropout}\!\left(\text{Sublayer}\!\left(\text{LayerNorm}(x)\right)\right)
+  \text{LayerNorm}(\mathbf{x}) = \boldsymbol{\gamma} \odot \frac{\mathbf{x} - \boldsymbol{\mu}}{\boldsymbol{\sigma} + \epsilon} + \boldsymbol{\beta}
+\]
+
+where $\boldsymbol{\mu}$ and $\boldsymbol{\sigma}$ are the mean and standard
+deviation computed over the $d$ features of $\mathbf{x}$, $\epsilon$ is a
+small constant ($10^{-5}$) for numerical stability, and
+$\boldsymbol{\gamma}$ and $\boldsymbol{\beta}$ are learnable scale and shift
+parameters (each of dimension $d$) that allow the model to undo the
+normalization if needed.
+
+\begin{keyconcept}
+  \textbf{LayerNorm vs.\ BatchNorm.} Batch normalization computes statistics
+  across the \emph{batch} dimension, making it sensitive to batch size and
+  dependent on the other examples in the batch. LayerNorm computes statistics
+  across the \emph{feature} dimension of each token independently. This makes
+  it:
+  \begin{itemize}
+    \item Independent of batch size (works for batch size $= 1$)
+    \item Identical at training and inference (no running statistics)
+    \item Natural for variable-length sequences (each position normalized
+          independently)
+  \end{itemize}
+  These properties make LayerNorm the standard choice for transformer models.
+\end{keyconcept}
+
+\section{Residual Connections}
+
+Each sublayer in the transformer block is wrapped in a \emph{residual connection}
+(also called a skip connection):
+
+\[
+  \text{out} = x + \text{Sublayer}(x)
 \]
 
 \begin{keyconcept}
-  \textbf{Why residual connections?} They provide a ``clean path'' for
-  gradients to flow through deep networks:
+  \textbf{Why residual connections?} In a deep network with many layers,
+  gradients must flow backward through every layer. Without skip connections,
+  each layer multiplies the gradient by its Jacobian, and the product of many
+  small Jacobians can shrink gradients to near zero (\emph{vanishing gradients}).
+  The residual connection provides a ``clean path'' for gradients:
   \[
-    \frac{\partial}{\partial x}\bigl(x + f(x)\bigr) = 1 + \frac{\partial f}{\partial x}
+    \frac{\partial}{\partial x}\bigl(x + f(x)\bigr) = I + \frac{\partial f}{\partial x}
   \]
-  Even if $\frac{\partial f}{\partial x}$ is small, gradients can still
-  flow through the $+1$ term, preventing vanishing gradients.
+  Even if $\frac{\partial f}{\partial x}$ is near zero, the $I$ (identity)
+  term ensures that gradients flow through unchanged. This is why deep
+  residual networks (ResNets, and transformers with $>$6 layers) can be
+  trained effectively.
+
+  In GPT-2, the residual stream---the path from input to output that skips
+  every sublayer---carries information forward. Each sublayer reads from this
+  stream, computes, and \emph{adds} its result back. This means later layers
+  can always access the original token representations, not just the
+  transformed versions.
 \end{keyconcept}
 
 \section{Pre-Norm vs Post-Norm}
+
+The original Transformer used \emph{post-norm}: LayerNorm is applied
+\emph{after} the sublayer and residual addition. GPT-2 uses \emph{pre-norm}:
+LayerNorm is applied \emph{before} the sublayer.
 
 \begin{center}
 \begin{tabular}{lll}
@@ -47,6 +182,7 @@ Formula & $x + f(\text{LN}(x))$ & $\text{LN}(x + f(x))$ \\
 LN position & Before sublayer & After sublayer \\
 Gradient flow & LN \emph{not} in residual path & LN \emph{in} residual path \\
 Training stability & Stable without warmup & Requires warmup \\
+Output magnitude & Controlled by LN & Can grow with depth \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -57,32 +193,108 @@ Training stability & Stable without warmup & Requires warmup \\
   post-norm, LayerNorm sits inside the residual path, and its gradients
   can shrink the signal flowing backward. Pre-norm keeps LayerNorm
   ``outside'' the residual path, preserving gradient magnitude.
+
+  In practice, pre-norm also means the output of each sublayer is added to
+  the residual stream \emph{unchanged}---its magnitude does not depend on the
+  number of layers. In post-norm, each LayerNorm rescales the residual stream,
+  and as depth increases, the variance of the output can grow or shrink
+  unpredictably.
+\end{keyconcept}
+
+\section{The GELU Activation Function}
+
+The feed-forward network in each transformer block uses the \textbf{Gaussian
+Error Linear Unit} (GELU) activation function, defined as:
+
+\[
+  \text{GELU}(x) = x \cdot \Phi(x) = x \cdot P(Z \leq x), \quad Z \sim \mathcal{N}(0, 1)
+\]
+
+where $\Phi(x)$ is the CDF of the standard normal distribution. Intuitively,
+GELU multiplies the input by the probability that a standard normal random
+variable is less than or equal to that input. For large positive $x$, $\Phi(x)
+\approx 1$ and GELU passes the value through. For large negative $x$,
+$\Phi(x) \approx 0$ and GELU zeroes it out. For values near zero, GELU
+provides a smooth transition rather than a hard cutoff.
+
+In practice, GELU is approximated by the faster ``tanh approximation'':
+
+\[
+  \text{GELU}(x) \approx 0.5\,x\left(1 + \tanh\!\left[\sqrt{\frac{2}{\pi}}\left(x + 0.044715x^3\right)\right]\right)
+\]
+
+\begin{keyconcept}
+  \textbf{GELU vs.\ ReLU.} Both are non-linear activations, but they differ in
+  important ways:
+  \begin{itemize}
+    \item \textbf{ReLU} applies a hard threshold: $\text{ReLU}(x) = \max(0, x)$.
+          It completely zeros out negative inputs and provides no gradient
+          for them. This creates ``dead neurons'' that never activate.
+    \item \textbf{GELU} provides a \emph{smooth}, probabilistic gating. Small
+          negative values are not completely zeroed---they receive a small but
+          non-zero output proportional to how likely they are to be
+          ``important.'' This soft gating is differentiable everywhere, unlike
+          ReLU which has a kink at $x = 0$.
+    \item Empirically, GELU outperforms ReLU in transformer models. The smooth
+          gradient landscape and state-dependent gating are hypothesized to
+          help optimization and representation learning.
+  \end{itemize}
+  In PyTorch, GELU is available as \texttt{nn.GELU()} or
+  \texttt{F.gelu()}.
 \end{keyconcept}
 
 \section{Feed-Forward Network}
 
-The FFN in each block has two linear layers with a GELU activation:
+Each transformer block contains a position-wise feed-forward network (FFN)
+that operates independently on each position. ``Position-wise'' means the
+same two linear transformations are applied to every token, but with different
+input values---equivalent to a 1D convolution with kernel size 1.
+
+The FFN has two linear layers with a GELU activation in between:
 
 \[
   \text{FFN}(x) = W_2\!\left(\text{GELU}(W_1 x + b_1)\right) + b_2
 \]
 
-where GELU is defined as:
-
-\[
-  \text{GELU}(x) = x \cdot \Phi(x) \approx 0.5\,x\left(1 + \tanh\!\left[\sqrt{\frac{2}{\pi}}\left(x + 0.044715x^3\right)\right]\right)
-\]
-
 \begin{keyconcept}
-  The FFN's hidden dimension is typically $4\times$ the embedding
-  dimension (e.g., 768 $\rightarrow$ 3072 for GPT-2 Small). This
-  expansion allows the model to learn richer representations in a
-  higher-dimensional space before projecting back down.
+  The FFN's hidden dimension is $4\times$ the embedding dimension
+  (e.g., $768 \rightarrow 3072$ for GPT-2 Small). This expansion-then-contraction
+  pattern serves two purposes:
+  \begin{itemize}
+    \item The \emph{expansion} to 4$d$ allows the model to learn richer
+          intermediate representations in a higher-dimensional space, where
+          features that are entangled in the lower-dimensional embedding can
+          be separated.
+    \item The \emph{contraction} back to $d$ compresses this richer
+          representation, and the residual connection adds this compressed
+          result back to the original stream.
+  \end{itemize}
+  Together, the FFN is where much of the model's ``knowledge'' is stored---it
+  can be thought of as a key-value memory where the first layer stores patterns
+  and the second layer retrieves and combines them.
 \end{keyconcept}
+
+\begin{pseudocode}[Feed-Forward Network]
+class FeedForward(nn.Module):
+    def __init__(self, embed_dim: int):
+        self.net = nn.Sequential(
+            nn.Linear(embed_dim, 4 * embed_dim),
+            nn.GELU(),
+            nn.Linear(4 * embed_dim, embed_dim),
+        )
+        self.drop = nn.Dropout(0.1)
+
+    def forward(self, x: Tensor) -> Tensor:
+        # x: [batch, seq_len, embed_dim]
+        return self.drop(self.net(x))
+        # output: [batch, seq_len, embed_dim]
+\end{pseudocode}
 
 \section{Transformer Block Assembly}
 
-A single TransformerBlock:
+A single transformer block combines multi-head self-attention, a feed-forward
+network, layer normalization, residual connections, and dropout. Using the
+pre-norm architecture:
 
 \begin{tikzpicture}[
   node distance=0.6cm,
@@ -108,55 +320,272 @@ A single TransformerBlock:
   \draw[arrow] (drop2) -- (output);
 \end{tikzpicture}
 
-Or more precisely:
+The computation inside a single block is:
+
 \begin{align*}
   x' &= x + \text{Dropout}\!\left(\text{MHA}\!\left(\text{LN}_1(x)\right)\right) \\
   x'' &= x' + \text{Dropout}\!\left(\text{FFN}\!\left(\text{LN}_2(x')\right)\right)
 \end{align*}
 
+Notice the pattern: each sublayer (attention or FFN) operates on the
+\emph{normalized} input, and its output is added back to the
+\emph{un-normalized} residual stream. This is the pre-norm scheme discussed
+earlier: the residual stream always carries the original signal, and each
+sublayer contributes an additive correction.
+
+\begin{pseudocode}[Transformer Block Forward Pass]
+class TransformerBlock(nn.Module):
+    def __init__(self, embed_dim: int, num_heads: int, drop_rate: float = 0.1):
+        self.ln1 = nn.LayerNorm(embed_dim)
+        self.attn = MultiHeadAttention(embed_dim, num_heads, drop_rate)
+        self.ln2 = nn.LayerNorm(embed_dim)
+        self.ffn = FeedForward(embed_dim)
+        self.drop1 = nn.Dropout(drop_rate)
+        self.drop2 = nn.Dropout(drop_rate)
+
+    def forward(self, x: Tensor) -> Tensor:
+        # x: [batch, seq_len, embed_dim]
+        # Pre-norm: normalize before sublayer, add residual after
+        x = x + self.drop1(self.attn(self.ln1(x)))
+        # x: [batch, seq_len, embed_dim]
+        x = x + self.drop2(self.ffn(self.ln2(x)))
+        # x: [batch, seq_len, embed_dim]
+        return x
+\end{pseudocode}
+
+\begin{keyconcept}
+  \textbf{Why dropout?} Dropout randomly zeros out elements during training with
+  probability $p$ (typically 0.1 in GPT-2). It serves as a regularizer that
+  prevents the model from becoming overly reliant on specific neurons. In the
+  transformer block, dropout is applied \emph{after} each sublayer's output and
+  \emph{before} it is added to the residual stream. At inference time, dropout
+  is disabled (all neurons active), but outputs are scaled by $(1 - p)$ to
+  maintain the expected activation magnitude.
+\end{keyconcept}
+
 \section{Full GPT-2 Architecture}
 
-Stack $N$ transformer blocks on top of embeddings, add a final
-LayerNorm, and project to vocabulary-sized logits:
+The complete GPT-2 model stacks $N$ transformer blocks on top of the
+embeddings, adds a final LayerNorm, and projects to vocabulary-sized logits.
+This output projection layer reuses the token embedding matrix (weight tying)
+in some implementations, reducing the parameter count.
 
 \begin{pseudocode}[GPT-2 Forward Pass]
-$x \leftarrow \text{Embed}_{\text{token}}(\text{ids}) + \text{Embed}_{\text{pos}}(\text{positions})$\\[3pt]
-\textbf{for} block $1$ \textbf{to} $N$:\\
-\quad $x \leftarrow \text{TransformerBlock}(x)$ \hfill\textrm{\small (includes residual connections)}\\[3pt]
-$x \leftarrow \text{LayerNorm}(x)$\\
-$\text{logits} \leftarrow \text{Linear}(x)$ \hfill\textrm{\small (project to vocab size)}\\
-\textbf{return} logits
+class GPT2(nn.Module):
+    def __init__(self, vocab_size: int = 50257,
+                 context_len: int = 1024,
+                 embed_dim: int = 768,
+                 num_layers: int = 12,
+                 num_heads: int = 12,
+                 drop_rate: float = 0.1):
+        self.embed = GPT2Embeddings(vocab_size, context_len, embed_dim)
+        self.blocks = nn.ModuleList([
+            TransformerBlock(embed_dim, num_heads, drop_rate)
+            for _ in range(num_layers)
+        ])
+        self.ln_f = nn.LayerNorm(embed_dim)
+        self.head = nn.Linear(embed_dim, vocab_size, bias=False)
+
+    def forward(self, token_ids: Tensor) -> Tensor:
+        # token_ids: [batch, seq_len]
+        x = self.embed(token_ids)
+        # x: [batch, seq_len, embed_dim]
+        for block in self.blocks:
+            x = block(x)
+            # x: [batch, seq_len, embed_dim] after each block
+        x = self.ln_f(x)
+        # x: [batch, seq_len, embed_dim]
+        logits = self.head(x)
+        # logits: [batch, seq_len, vocab_size]
+        return logits
 \end{pseudocode}
 
 \begin{center}
-\begin{tabular}{lccc}
+\begin{tabular}{lcccc}
 \toprule
-\textbf{Model} & \textbf{Embed Dim} & \textbf{Layers} & \textbf{Heads} \\
+\textbf{Model} & \textbf{Embed Dim} & \textbf{Layers} & \textbf{Heads} & \textbf{Parameters} \\
 \midrule
-GPT-2 Small  & 768  & 12 & 12 \\
-GPT-2 Medium & 1024 & 24 & 16 \\
-GPT-2 Large  & 1280 & 36 & 20 \\
-GPT-2 XL     & 1600 & 48 & 25 \\
+GPT-2 Small  & 768  & 12 & 12 & 124M \\
+GPT-2 Medium & 1024 & 24 & 16 & 355M \\
+GPT-2 Large  & 1280 & 36 & 20 & 774M \\
+GPT-2 XL     & 1600 & 48 & 25 & 1.5B \\
 \bottomrule
 \end{tabular}
 \end{center}
 
+\begin{keyconcept}
+  \textbf{Where are the parameters?} The bulk of GPT-2's parameters are in
+  three places:
+  \begin{itemize}
+    \item \textbf{Token embeddings}: $V \times d = 50{,}257 \times 768 \approx 38.6\text{M}$
+          parameters. This alone is $\sim$31\% of GPT-2 Small.
+    \item \textbf{Attention layers}: Each head has four projections
+          ($W_Q, W_K, W_V, W_O$), each $d \times d$, totaling $4d^2$ per
+          block. Over 12 blocks, that's $4 \times 768^2 \times 12 \approx 28.3\text{M}$.
+    \item \textbf{FFN layers}: Each block has two linear layers
+          ($d \times 4d$ and $4d \times d$), totaling $8d^2$ per block.
+          Over 12 blocks, that's $8 \times 768^2 \times 12 \approx 56.6\text{M}$.
+  \end{itemize}
+  The FFN layers account for roughly half the transformer blocks' parameters,
+  which is why later models (like MoE architectures) often target the FFN for
+  sparsification.
+\end{keyconcept}
+
 \section{Text Generation Strategies}
 
-\begin{itemize}
-  \item \textbf{Greedy}: pick $\text{argmax}$ at each step. Deterministic
-        but prone to repetition.
-  \item \textbf{Temperature}: scale logits by $T$ before softmax.
-        $T<1$ makes the distribution sharper; $T>1$ makes it flatter.
-        \[
-          P(w_i) = \frac{\exp(\text{logit}_i / T)}{\sum_j \exp(\text{logit}_j / T)}
-        \]
-  \item \textbf{Top-$k$}: sample only from the $k$ highest-probability
-        tokens. Filters out unlikely tokens while maintaining randomness.
-  \item \textbf{Top-$p$} (nucleus sampling): sample from the smallest
-        set of tokens whose cumulative probability exceeds $p$.
-        More adaptive than top-$k$ since the pool size varies.
-\end{itemize}
+After the model produces logits of shape $[\text{batch}, \text{seq\_len},
+\text{vocab\_size}]$, we need a strategy to select the next token from the
+distribution over the vocabulary. The choice of strategy has a dramatic effect
+on the quality, diversity, and coherence of generated text.
+
+\subsection{Greedy Decoding}
+
+The simplest strategy: at each step, pick the token with the highest
+probability.
+
+\begin{pseudocode}[Greedy Decoding]
+def generate_greedy(model: nn.Module, token_ids: Tensor,
+                    max_new_tokens: int) -> Tensor:
+    # token_ids: [batch, seq_len]
+    for _ in range(max_new_tokens):
+        logits = model(token_ids)
+        # logits: [batch, seq_len, vocab_size]
+        next_logits = logits[:, -1, :]
+        # next_logits: [batch, vocab_size]
+        next_token = torch.argmax(next_logits, dim=-1, keepdim=True)
+        # next_token: [batch, 1]
+        token_ids = torch.cat([token_ids, next_token], dim=1)
+        # token_ids: [batch, seq_len + 1]
+    return token_ids
+\end{pseudocode}
+
+Greedy decoding is deterministic and fast, but it tends to produce repetitive,
+boring text because it always chooses the most probable continuation, which in
+natural language is often a safe, generic word. It can also get stuck in loops
+(e.g., repeating the same phrase indefinitely).
+
+\subsection{Temperature Sampling}
+
+Temperature controls the ``sharpness'' of the probability distribution. After
+computing logits, we divide by a temperature $T > 0$ before applying softmax:
+
+\[
+  P(w_i) = \frac{\exp(\text{logit}_i / T)}{\sum_j \exp(\text{logit}_j / T)}
+\]
+
+\begin{pseudocode}[Temperature Sampling]
+def generate_with_temperature(model: nn.Module, token_ids: Tensor,
+                              max_new_tokens: int, temperature: float) -> Tensor:
+    # token_ids: [batch, seq_len]
+    for _ in range(max_new_tokens):
+        logits = model(token_ids)
+        # logits: [batch, seq_len, vocab_size]
+        next_logits = logits[:, -1, :] / temperature
+        # next_logits: [batch, vocab_size]
+        probs = torch.softmax(next_logits, dim=-1)
+        # probs: [batch, vocab_size]
+        next_token = torch.multinomial(probs, num_samples=1)
+        # next_token: [batch, 1]
+        token_ids = torch.cat([token_ids, next_token], dim=1)
+    return token_ids
+\end{pseudocode}
+
+\begin{keyconcept}
+  \textbf{Temperature effects:}
+  \begin{itemize}
+    \item $T \rightarrow 0$: softmax collapses to a point mass on the highest
+          logit (greedy decoding).
+    \item $T = 1$: use the model's original distribution (standard sampling).
+    \item $T > 1$: the distribution becomes flatter, increasing randomness
+          and creativity but risking incoherence.
+    \item $T < 1$: the distribution becomes sharper, giving higher probability
+          to top tokens. This produces more focused, deterministic text.
+  \end{itemize}
+  Typical values: $T \in [0.7, 1.0]$ for coherent but varied text.
+\end{keyconcept}
+
+\subsection{Top-$k$ Sampling}
+
+Top-$k$ sampling restricts the candidate set to the $k$ tokens with the
+highest probabilities. All tokens outside the top $k$ are set to zero
+probability, and the remaining probabilities are renormalized.
+
+\begin{pseudocode}[Top-k Sampling]
+def generate_top_k(model: nn.Module, token_ids: Tensor,
+                   max_new_tokens: int, temperature: float = 1.0,
+                   k: int = 50) -> Tensor:
+    # token_ids: [batch, seq_len]
+    for _ in range(max_new_tokens):
+        logits = model(token_ids)[:, -1, :]
+        # logits: [batch, vocab_size]
+        logits = logits / temperature
+        # Zero out all tokens outside the top-k
+        top_k_values, _ = torch.topk(logits, k)
+        # top_k_values: [batch, k]
+        threshold = top_k_values[:, -1:]  # k-th largest value
+        # threshold: [batch, 1]
+        logits = logits.masked_fill(logits < threshold, float('-inf'))
+        # logits: [batch, vocab_size]  (non-top-k set to -inf)
+        probs = torch.softmax(logits, dim=-1)
+        # probs: [batch, vocab_size]
+        next_token = torch.multinomial(probs, num_samples=1)
+        # next_token: [batch, 1]
+        token_ids = torch.cat([token_ids, next_token], dim=1)
+    return token_ids
+\end{pseudocode}
+
+The advantage of top-$k$ is that it filters out unlikely tokens and prevents
+the model from sampling absurd continuations. However, a fixed $k$ can be too
+restrictive in some contexts (where the distribution should be broad) and too
+permissive in others (where only one or two tokens are truly viable).
+
+\subsection{Top-$p$ (Nucleus) Sampling}
+
+Top-$p$ sampling (also called nucleus sampling) addresses the rigidity of
+top-$k$ by adapting the candidate pool size. Instead of always keeping the top
+$k$ tokens, it keeps the smallest set of tokens whose cumulative probability
+exceeds $p$:
+
+\begin{pseudocode}[Top-p (Nucleus) Sampling]
+def generate_top_p(model: nn.Module, token_ids: Tensor,
+                  max_new_tokens: int, temperature: float = 1.0,
+                  p: float = 0.9) -> Tensor:
+    # token_ids: [batch, seq_len]
+    for _ in range(max_new_tokens):
+        logits = model(token_ids)[:, -1, :] / temperature
+        # logits: [batch, vocab_size]
+        # Sort logits in descending order
+        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+        # sorted_logits: [batch, vocab_size]
+        cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+        # cumulative_probs: [batch, vocab_size]
+        # Remove tokens with cumulative probability above p (keep first token)
+        sorted_mask = cumulative_probs - torch.softmax(sorted_logits, dim=-1) >= p
+        # Zero out logits for removed tokens
+        sorted_logits[sorted_mask] = float('-inf')
+        # Unsort to restore original order
+        logits = sorted_logits.scatter(1, sorted_indices, sorted_logits)
+        # logits: [batch, vocab_size]  (non-nucleus set to -inf)
+        probs = torch.softmax(logits, dim=-1)
+        # probs: [batch, vocab_size]
+        next_token = torch.multinomial(probs, num_samples=1)
+        token_ids = torch.cat([token_ids, next_token], dim=1)
+    return token_ids
+\end{pseudocode}
+
+\begin{keyconcept}
+  Top-$p$ is more adaptive than top-$k$:
+  \begin{itemize}
+    \item When the model is \emph{confident} (one token dominates), top-$p$
+          may keep only 1--2 tokens, keeping generation focused.
+    \item When the model is \emph{uncertain} (probabilities are spread out),
+          top-$p$ keeps many tokens, allowing creative continuations.
+    \item Typical value: $p = 0.9$ means the model samples from tokens making
+          up 90\% of the probability mass.
+  \end{itemize}
+  In practice, temperature and top-$p$ are often combined: temperature first
+  adjusts the distribution's shape, then top-$p$ filters the candidates.
+\end{keyconcept}
 
 \section*{Review Questions}
 
@@ -176,3 +605,130 @@ GPT-2 XL     & 1600 & 48 & 25 \\
   situation would top-$p$ produce a different set of candidate tokens
   than top-$k$?
 \end{reviewquestion}
+
+\begin{reviewquestion}[4]
+  Why are token and positional embeddings added rather than concatenated?
+  What would be the disadvantage of concatenation?
+\end{reviewquestion}
+
+\begin{reviewquestion}[5]
+  What is the purpose of the $4\times$ expansion in the feed-forward network?
+  How many parameters does the FFN contribute per transformer block in
+  GPT-2 Small?
+\end{reviewquestion}
+
+\begin{reviewquestion}[6]
+  Explain why GELU can produce non-zero outputs for negative inputs while ReLU
+  cannot. Why might this smooth gating be beneficial for representation
+  learning in transformers?
+\end{reviewquestion}
+
+\begin{reviewquestion}[7]
+  In the GPT-2 model, a final LayerNorm (\texttt{ln\_f}) is applied after all
+  transformer blocks but before the output head. Why is this normalization
+  necessary, and what would happen without it?
+\end{reviewquestion}
+
+\begin{reviewquestion}[8]
+  When temperature $T$ approaches 0, what does sampling converge to? When
+  $T$ approaches infinity, what happens to the probability distribution?
+\end{reviewquestion}
+
+\begin{reviewquestion}[9]
+  In the residual connection $x' = x + f(\text{LN}(x))$, why is it important
+  that $f$ operates on $\text{LN}(x)$ rather than $x$ directly? What property
+  does this give the residual stream?
+\end{reviewquestion}
+
+\begin{reviewquestion}[10]
+  GPT-2 uses learned positional embeddings instead of the sinusoidal
+  positional encodings from the original Transformer. What are the advantages
+  and disadvantages of each approach?
+\end{reviewquestion}
+
+\begin{reviewquestion}[11]
+  In a model with 12 transformer blocks, each block adds two residual
+  connections. How many ``skip paths'' exist from the input to the output?
+  Why does this matter for gradient flow?
+\end{reviewquestion}
+
+\begin{reviewquestion}[12]
+  The output head in GPT-2 (\texttt{nn.Linear(embed\_dim, vocab\_size)}) can
+  optionally share weights with the token embedding matrix. What is the
+  argument for weight tying, and how many parameters does it save for
+  GPT-2 Small?
+\end{reviewquestion}
+
+\section*{Problems}
+
+\begin{problem}[1]
+  \textbf{Implement a TransformerBlock.} Write a PyTorch
+  \texttt{nn.Module} that implements the pre-norm transformer block as described
+  in this chapter. Your module should include:
+  \begin{itemize}
+    \item Two \texttt{LayerNorm} layers (\texttt{ln1}, \texttt{ln2})
+    \item A \texttt{MultiHeadAttention} module
+    \item A \texttt{FeedForward} module (with $4\times$ expansion and GELU)
+    \item Dropout after each sublayer
+    \item Residual connections around each sublayer
+  \end{itemize}
+  Verify that your block preserves the input shape, i.e., if the input is
+  $[\text{batch}, \text{seq\_len}, \text{embed\_dim}]$, the output should be
+  the same shape.
+\end{problem}
+
+\begin{problem}[2]
+  \textbf{Implement text generation with temperature and top-$k$ sampling.}
+  Starting from a trained model that outputs logits, write a
+  \texttt{generate} function that:
+  \begin{itemize}
+    \item Takes a prompt as token IDs, a max number of new tokens, a
+          temperature, and a $k$ value for top-$k$ filtering
+    \item At each step, applies temperature scaling, then top-$k$
+          filtering, then samples from the resulting distribution
+    \item Concatenates each sampled token to the running sequence
+    \item Stops when \texttt{max\_new\_tokens} is reached or an end-of-sequence
+          token is produced
+  \end{itemize}
+  Generate text with temperature $\in \{0.5, 1.0, 1.5\}$ and $k = 50$.
+  Observe how temperature affects the output.
+\end{problem}
+
+\begin{problem}[3]
+  \textbf{Verify the parameter count.} Build a GPT-2 Small configuration
+  ($\text{embed\_dim} = 768$, 12 layers, 12 heads, $\text{vocab\_size} = 50257$)
+  and count the total number of parameters. Break down the count by component:
+  token embeddings, positional embeddings, attention layers, FFN layers, and
+  the output head. Compare your count to the published 124M figure. Where are
+  the most parameters concentrated?
+\end{problem}
+
+\begin{problem}[4]
+  \textbf{Compare greedy, temperature, and top-$p$ generation.} Load a
+  pre-trained GPT-2 model and use the same prompt to generate text with each
+  of the following strategies:
+  \begin{itemize}
+    \item Greedy (argmax)
+    \item Temperature sampling with $T = 0.8$
+    \item Top-$p$ sampling with $p = 0.9$ and $T = 0.8$
+  \end{itemize}
+  Generate 5 samples per strategy. For each strategy, report: (a) whether the
+  output ever enters a repetition loop, (b) the diversity across 5 samples, and
+  (c) your subjective assessment of coherence. What patterns do you notice?
+\end{problem}
+
+\begin{problem}[5]
+  \textbf{Implement top-$p$ (nucleus) sampling.} Write a function that:
+  \begin{itemize}
+    \item Sorts logits in descending order
+    \item Computes the cumulative softmax probabilities
+    \item Identifies the smallest set of tokens whose cumulative probability
+          exceeds $p$
+    \item Sets logits for all tokens outside the nucleus to $-\infty$
+    \item Samples from the resulting distribution
+  \end{itemize}
+  Compare the behavior of top-$p$ ($p = 0.9$) against top-$k$ ($k = 50$) on
+  prompts where the model is very confident (e.g., ``The capital of France is'')
+  and prompts where it is uncertain (e.g., ``The meaning of life is''). How
+  does the candidate set size differ?
+\end{problem}

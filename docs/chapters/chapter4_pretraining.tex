@@ -1,132 +1,455 @@
 \chapter{Pretraining}
 
+Pretraining is the foundational stage of building a large language model, where the model learns to predict the next token in a sequence by processing massive amounts of text data. Unlike fine-tuning---which adapts a pretrained model to a specific task---pretraining develops the model's general understanding of language: grammar, facts, reasoning patterns, and stylistic conventions all emerge from this single self-supervised objective. Everything the model knows before task-specific adaptation comes from pretraining.
+
+This chapter covers the mechanics of pretraining a GPT-style model from scratch. We begin with the loss function that drives next-token prediction, then walk through the training loop, optimizer choice, learning rate scheduling, weight initialization, and two essential techniques for training large models on limited hardware: gradient accumulation and mixed precision. By the end of this chapter, you will understand how to set up and run a full pretraining pipeline.
+
 \section{Cross-Entropy Loss for Next-Token Prediction}
 
-The model outputs logits of shape $[\text{batch} \times \text{seq\_len},
-\text{vocab\_size}]$. The target is the shifted token IDs of shape
-$[\text{batch} \times \text{seq\_len}]$.
+During pretraining, the GPT model takes a sequence of token IDs as input and produces, for every position, a probability distribution over the vocabulary predicting the \emph{next} token. The objective is to minimize the discrepancy between these predicted distributions and the actual next tokens. The standard choice for this is \textbf{cross-entropy loss}, which is the negative log-likelihood of the correct next token under the model's predicted distribution.
+
+\subsection{The Loss Function}
+
+Given a corpus of text, the model sees a sequence of tokens $w_1, w_2, \ldots, w_N$. At position $i$, the model uses the context $w_1, \ldots, w_i$ to predict $w_{i+1}$. The pretraining loss averages the negative log-probability of the correct next token over all positions:
 
 \[
   \mathcal{L} = -\frac{1}{N}\sum_{i=1}^{N} \log P(w_{i+1} \mid w_1, \ldots, w_i)
 \]
 
+This is precisely what cross-entropy computes. Concretely, the model outputs \textbf{logits} of shape $[\text{batch} \times \text{seq\_len}, \text{vocab\_size}]$---unnormalized scores for every word in the vocabulary at every position. The target is the shifted input token IDs of shape $[\text{batch} \times \text{seq\_len}]$. The shift works as follows: if the input is ``The cat sat on,"" the target for training is ``cat sat on \texttt{<eos>}""---each position is asked to predict the very next token.
+
 \begin{keyconcept}
-  Cross-entropy expects:
+  Cross-entropy for next-token prediction requires two tensors:
   \begin{itemize}
-    \item \textbf{Input}: logits $[\text{batch} \times \text{seq}, \text{vocab}]$
-    \item \textbf{Target}: integer class indices $[\text{batch} \times \text{seq}]$
+    \item \textbf{Input (logits)}: shape $[\text{batch} \times \text{seq}, \text{vocab}]$ --- raw scores for each vocabulary entry at each position
+    \item \textbf{Target}: integer class indices of shape $[\text{batch} \times \text{seq}]$ --- the ground-truth next token at each position
   \end{itemize}
-  The target is the input shifted by 1 position: ``The cat sat'' $\rightarrow$
-  ``cat sat on''.
+  The target is the input shifted by one position: ``The cat sat"" $\rightarrow$ ``cat sat on"". Internally, PyTorch's \texttt{cross\_entropy} applies \texttt{log\_softmax} to the logits along the vocabulary dimension, then selects the log-probability corresponding to the correct token index.
 \end{keyconcept}
 
-\section{Training Loop with AdamW}
+\subsection{A Concrete Numerical Example}
+
+To build intuition, consider a tiny vocabulary of just four tokens: \texttt{<unk>, the, cat, sat}. Suppose the model processes a two-token input sequence ``the cat"" and must predict ``cat"" at position~1 and ``sat"" at position~2.
+
+After the forward pass, the model produces logits for each position. Let us say position~1 produces logits $[0.5, -1.0, 2.0, -0.5]$ and position~2 produces logits $[1.0, 0.0, -1.0, 3.0]$.
+
+\begin{enumerate}
+  \item \textbf{Apply softmax} to convert logits into probabilities. For position~1:
+  \[
+    P(\texttt{<unk>}) = \frac{e^{0.5}}{Z} \approx 0.14, \quad
+    P(\texttt{the})  = \frac{e^{-1.0}}{Z} \approx 0.03, \quad
+    P(\texttt{cat})  = \frac{e^{2.0}}{Z} \approx 0.70, \quad
+    P(\texttt{sat})  = \frac{e^{-0.5}}{Z} \approx 0.08
+  \]
+  where $Z = e^{0.5} + e^{-1.0} + e^{2.0} + e^{-0.5} \approx 11.08$.
+
+  \item \textbf{Compute the loss} as the negative log-probability of the correct token. At position~1, the target is ``cat"" (index 2), so:
+  \[
+    \mathcal{L}_1 = -\log P(\texttt{cat}) = -\log(0.70) \approx 0.357
+  \]
+  At position~2, the target is ``sat"" (index 3), so:
+  \[
+    \mathcal{L}_2 = -\log P(\texttt{sat}) = -\log(0.73) \approx 0.315
+  \]
+
+  \item \textbf{Average over positions}:
+  \[
+    \mathcal{L} = \frac{0.357 + 0.315}{2} \approx 0.336
+  \]
+\end{enumerate}
+
+A low loss means the model assigns high probability to the correct next token; a high loss means the model is uncertain or wrong. Early in training, with random weights, the model assigns roughly uniform probability $\frac{1}{V}$ to each token, giving a loss of approximately $\log V$. For GPT-2's vocabulary of 50,257 tokens, the initial loss should be around $\log(50257) \approx 10.8$. Watching this value decrease during training is the primary signal that the model is learning.
+
+\section{The Training Loop}
+
+The training loop is the engine that drives pretraining. It iterates over the dataset, computes the loss for each batch, and updates the model's parameters via backpropagation. While conceptually simple, the details of the optimizer, learning rate, and gradient handling are critical to training stability and convergence.
+
+\subsection{Basic Structure}
+
+At its core, a training loop processes batches from a dataloader, computes forward and backward passes, and updates parameters. The following pseudocode shows the basic structure:
 
 \begin{pseudocode}[Training Loop]
-\textbf{for} epoch $= 1$ \textbf{to} $E$:\\
-\quad \textbf{for} batch \textbf{in} dataloader:\\
-\quad\quad logits $\leftarrow$ model(batch.input)\\
-\quad\quad loss $\leftarrow$ CrossEntropy(logits, batch.target)\\
-\quad\quad loss.backward()\\
-\quad\quad optimizer.step()\\
-\quad\quad optimizer.zero\_grad()
+def train(model: nn.Module, dataloader: DataLoader,
+          optimizer: optim.Optimizer, num_epochs: int) -> None:
+    for epoch in range(num_epochs):
+        for batch in dataloader:
+            # batch.input_ids: [batch, seq_len]
+            # batch.target_ids: [batch, seq_len] (shifted by 1)
+            logits = model(batch.input_ids)
+            # logits: [batch, seq_len, vocab_size]
+
+            # Flatten for cross-entropy
+            loss = cross_entropy(logits.view(-1, vocab_size),
+                                 batch.target_ids.view(-1))
+
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
 \end{pseudocode}
 
+Each step computes a forward pass through the entire model, evaluates how well the model predicted the next token, computes gradients via backpropagation, and updates the parameters. The \texttt{zero\_grad()} call clears accumulated gradients before the next iteration, preventing them from piling up across steps.
+
+\section{The AdamW Optimizer}
+
+\subsection{From SGD to Adam}
+
+Stochastic gradient descent (SGD) updates parameters as:
+\[
+  \theta_{t+1} = \theta_t - \eta \, \nabla_\theta \mathcal{L}
+\]
+SGD uses a single global learning rate and relies solely on the current gradient, making it sensitive to the choice of $\eta$ and prone to slow convergence on ill-conditioned loss landscapes.
+
+The \textbf{Adam} optimizer addresses these shortcomings by maintaining per-parameter adaptive learning rates. It keeps two moving averages:
+\begin{align*}
+  m_t &= \beta_1 m_{t-1} + (1 - \beta_1) g_t & &\text{(first moment: momentum)} \\
+  v_t &= \beta_2 v_{t-1} + (1 - \beta_2) g_t^2 & &\text{(second moment: uncentered variance)}
+\end{align*}
+These are bias-corrected:
+\begin{align*}
+  \hat{m}_t &= \frac{m_t}{1 - \beta_1^t}, &
+  \hat{v}_t &= \frac{v_t}{1 - \beta_2^t}
+\end{align*}
+And the parameter update is:
+\[
+  \theta_{t+1} = \theta_t - \eta \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon}
+\]
+This division by the square root of the second moment \emph{adapts} the effective learning rate for each parameter: parameters with large recent gradients get smaller updates, and parameters with small recent gradients get larger updates. This makes Adam far more robust to the scale of gradients across different layers.
+
+\subsection{Why AdamW Over Adam?}
+
+Standard Adam applies $L_2$ regularization (weight decay) by adding $\lambda \theta_t$ to the gradient before the adaptive update:
+\[
+  g_t^{\text{reg}} = g_t + \lambda \theta_t
+\]
+This is problematic because the weight decay term is rescaled by the adaptive learning rate $\frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon}$. Parameters with large second moments will have their weight decay effectively reduced, creating an unintended coupling between gradient magnitude and regularization strength.
+
+\textbf{AdamW} decouples weight decay from the gradient-based update. Instead of adding regularization to the gradient, it applies weight decay directly to the parameters:
+\[
+  \theta_{t+1} = \theta_t - \eta\left(\frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon}\right) - \eta \lambda \theta_t
+\]
+
+This can be rewritten as:
+\[
+  \theta_{t+1} = (1 - \eta \lambda)\,\theta_t - \eta \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon}
+\]
+
+The key difference is that weight decay now applies uniformly regardless of gradient history. Empirically, this decoupled formulation leads to better generalization and more stable training, especially for transformer models.
+
 \begin{keyconcept}
-  \textbf{AdamW} decouples weight decay from the gradient update:
+  \textbf{AdamW} decouples weight decay from the adaptive gradient update. The parameter update is:
   \[
     \theta_{t+1} = \theta_t - \eta\left(\frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon} + \lambda \theta_t\right)
   \]
-  Typical hyperparameters: $\text{lr} = 3 \times 10^{-4}$,
-  weight decay $= 0.01$, $\beta_1 = 0.9$, $\beta_2 = 0.999$.
+  Typical hyperparameters for GPT-2 scale pretraining: $\text{lr} = 3 \times 10^{-4}$, weight decay $= 0.01$, $\beta_1 = 0.9$, $\beta_2 = 0.999$.
 \end{keyconcept}
 
 \section{Learning Rate Scheduling}
 
-The learning rate follows a \textbf{warmup + cosine decay} schedule:
+Using a fixed learning rate throughout training is suboptimal. Early in training, the model's parameters are random, and large gradients can cause unstable updates. Late in training, the model needs smaller steps to converge to a good minimum. A \textbf{learning rate schedule} dynamically adjusts the learning rate during training to address both concerns.
 
+\subsection{Warmup Phase}
+
+When training begins, the model's weights are randomly initialized and the loss landscape is poorly understood. Large learning rates at this stage can produce parameter updates that are too aggressive, causing the loss to spike or the model to diverge entirely. \textbf{Learning rate warmup} starts the learning rate at a small value (often zero or near-zero) and linearly increases it to the maximum learning rate over a number of warmup steps $T_w$:
 \[
-  \text{lr}(t) =
-  \begin{cases}
-    \text{max\_lr} \cdot \frac{t}{T_w} & \text{if } t \leq T_w \\[6pt]
-    \text{min\_lr} + \frac{1}{2}(\text{max\_lr} - \text{min\_lr})
-    \left(1 + \cos\!\left(\pi \cdot \frac{t - T_w}{T - T_w}\right)\right)
-    & \text{if } t > T_w
-  \end{cases}
+  \text{lr}(t) = \text{max\_lr} \cdot \frac{t}{T_w} \quad \text{for } t \leq T_w
+\]
+This gives the optimizer a chance to accumulate stable momentum statistics before taking larger steps. Typical settings use $T_w$ as roughly 10\% of total training steps.
+
+\subsection{Cosine Decay Phase}
+
+After warmup, the learning rate follows a \textbf{cosine decay} schedule that smoothly decreases from the maximum learning rate to a minimum learning rate:
+\[
+  \text{lr}(t) = \text{min\_lr} + \frac{1}{2}(\text{max\_lr} - \text{min\_lr})
+  \left(1 + \cos\!\left(\pi \cdot \frac{t - T_w}{T - T_w}\right)\right)
+  \quad \text{for } t > T_w
 \]
 
-where $T_w$ is the number of warmup steps (typically 10\% of total) and
-$T$ is the total number of training steps. $\text{min\_lr}$ is typically
-$\text{max\_lr} / 10$.
+where $T$ is the total number of training steps and $\text{min\_lr}$ is typically $\text{max\_lr} / 10$. The cosine shape provides a smooth transition: the learning rate decreases slowly at first, then more rapidly in the middle, and slowly again near the end. This is preferred over step decay or linear decay because it avoids sudden jumps in the learning rate (which can destabilize training) and provides a more gradual refinement phase.
 
 \begin{keyconcept}
-  \textbf{Warmup} prevents instability at the start of training when
-  gradients are large and the model is randomly initialized. \textbf{Cosine
-  decay} allows the learning rate to decrease smoothly, enabling
-  finer parameter adjustments in later stages of training.
+  \textbf{Warmup} prevents instability at the start of training when gradients are large and the model's weights are random. \textbf{Cosine decay} allows the learning rate to decrease smoothly, enabling finer parameter adjustments in later stages of training. Together, they form the \textbf{warmup + cosine decay} schedule, which has become the de facto standard for pretraining transformer models.
 \end{keyconcept}
+
+\begin{pseudocode}[Cosine Decay Learning Rate Scheduler]
+def get_lr(step: int, warmup_steps: int, max_lr: float,
+           min_lr: float, total_steps: int) -> float:
+    # step: current training step
+    # warmup_steps: number of warmup steps (e.g., 10% of total)
+    # max_lr: peak learning rate (e.g., 3e-4)
+    # min_lr: minimum learning rate (e.g., max_lr / 10)
+    # total_steps: total number of training steps
+
+    if step < warmup_steps:
+        # Linear warmup: ramp from ~0 to max_lr
+        return max_lr * (step / warmup_steps)
+
+    # After training is complete, return min_lr
+    if step >= total_steps:
+        return min_lr
+
+    # Cosine decay from max_lr to min_lr
+    progress = (step - warmup_steps) / (total_steps - warmup_steps)
+    return min_lr + 0.5 * (max_lr - min_lr) * (1 + math.cos(math.pi * progress))
+\end{pseudocode}
+
+This function should be called at every training step to compute the current learning rate, which is then used to set the optimizer's learning rate before the parameter update.
 
 \section{Weight Initialization}
 
-GPT-2 initializes weights from $\mathcal{N}(0, 0.02)$ for embeddings
-and linear layers. This small standard deviation prevents early
-training instability.
+Weight initialization determines the starting point of optimization. A poor initialization can lead to training instability, slow convergence, or complete failure to learn. The goal is to start with weights that produce activations of reasonable magnitude throughout the network, avoiding the twin problems of \textbf{vanishing signals} (weights too small) and \textbf{exploding signals} (weights too large).
+
+\subsection{Why Initialization Matters}
+
+Consider a transformer with $L$ layers. If each layer's linear transformation multiplies the activation norm by a factor slightly greater than 1 (say, $1.01$), then after $L = 96$ layers the norm has grown by a factor of $1.01^{96} \approx 2.6$. But if the factor is $0.5$, the norm shrinks to $0.5^{96} \approx 10^{-29}$---essentially zero. This exponential sensitivity to per-layer scaling means that initialization must be chosen carefully to keep forward and backward signals in a reasonable range.
+
+\subsection{GPT-2's Initialization Strategy}
+
+GPT-2 initializes all embedding layers and linear transformation weight matrices from a normal distribution:
+\[
+  W \sim \mathcal{N}(0, 0.02)
+\]
+The standard deviation of $0.02$ is deliberately small. For a weight matrix of shape $[d_{\text{out}}, d_{\text{in}}]$, the variance of the output is approximately $\sigma^2 \cdot d_{\text{in}}$ (since each output is a sum of $d_{\text{in}}$ terms each with variance $\sigma^2$). With $\sigma = 0.02$ and $d_{\text{in}} = 768$ (GPT-2 Small), the output variance is roughly $0.02^2 \times 768 \approx 0.31$, which keeps activations in a suitable range.
+
+\begin{keyconcept}
+  \textbf{What happens with different initialization scales?}
+  \begin{itemize}
+    \item \textbf{Too large} (e.g., $\sigma = 1.0$): Outputs explode through the layers. Softmax saturates, producing near-one and near-zero probabilities, yielding tiny gradients and unstable training.
+    \item \textbf{Too small} (e.g., $\sigma = 0.001$): Signals vanish through the network. All activations become nearly identical, providing no useful gradient signal for learning.
+    \item \textbf{Just right} ($\sigma = 0.02$ for GPT-2): Activations maintain reasonable magnitude through all layers, enabling healthy gradient flow and stable training.
+  \end{itemize}
+\end{keyconcept}
+
+\subsection{Other Initialization Strategies}
+
+The $0.02$ standard deviation is specific to GPT-2's architecture. An alternative approach is \textbf{Xavier/Glorot initialization}, which sets:
+\[
+  \sigma = \sqrt{\frac{2}{d_{\text{in}} + d_{\text{out}}}}
+\]
+This ensures that the variance of both forward activations and backward gradients is approximately preserved across layers, regardless of the layer width. Another popular choice for ReLU-based networks is \textbf{Kaiming/He initialization} ($\sigma = \sqrt{2 / d_{\text{in}}}$), though for GELU-activated transformers, GPT-2's fixed $0.02$ works well in practice.
+
+Biases are typically initialized to zero, and the special \textbf{output projection layer} (which maps hidden states back to vocabulary logits) is often initialized with even smaller weights to avoid producing extremely large logits early in training. GPT-2 also rescales the residual projections by a factor of $1/\sqrt{2N}$ where $N$ is the number of residual layers, compensating for the additive growth of residual streams.
 
 \section{Gradient Accumulation}
 
-When batch size is limited by GPU memory, gradient accumulation
-simulates larger batches:
+Modern language models require large batch sizes for stable training (e.g., batch sizes of 512 or more sequences). However, GPU memory often limits how many sequences can fit in a single forward-backward pass. \textbf{Gradient accumulation} simulates a larger batch size by accumulating gradients across multiple smaller micro-batches before performing a single optimizer step.
+
+The idea is straightforward: instead of calling \texttt{optimizer.step()} after every micro-batch, we call \texttt{loss.backward()} multiple times. PyTorch's autograd system adds gradients to the \texttt{.grad} tensors by default ($+=$), so gradients from successive micro-batches naturally accumulate. After processing enough micro-batches to equal the desired effective batch size, we call \texttt{optimizer.step()} and \texttt{optimizer.zero\_grad()}.
 
 \begin{pseudocode}[Gradient Accumulation]
-\textbf{for} step $= 1$ \textbf{to} total\_steps:\\
-\quad batch\_loss $\leftarrow$ model(batch)\\
-\quad scaled\_loss $\leftarrow$ batch\_loss / grad\_accml\_steps\\
-\quad scaled\_loss.backward() \hfill $\triangleright$ Accumulate gradients\\
-\quad \textbf{if} step \% grad\_accml\_steps $== 0$:\\
-\quad\quad optimizer.step()\\
-\quad\quad optimizer.zero\_grad()
+def train_with_accumulation(model: nn.Module, dataloader: DataLoader,
+                            optimizer: optim.Optimizer,
+                            grad_accum_steps: int) -> None:
+    # grad_accum_steps: number of micro-batches per optimizer step
+    # effective batch = micro_batch_size * grad_accum_steps
+
+    optimizer.zero_grad()
+
+    for step, batch in enumerate(dataloader):
+        # Forward pass: [batch, seq_len] -> [batch, seq_len, vocab_size]
+        logits = model(batch.input_ids)
+        loss = cross_entropy(logits.view(-1, vocab_size),
+                             batch.target_ids.view(-1))
+
+        # Scale loss to keep gradient magnitude consistent
+        # with true large-batch training
+        scaled_loss = loss / grad_accum_steps
+        scaled_loss.backward()    # Gradients accumulate in .grad
+
+        if (step + 1) % grad_accum_steps == 0:
+            optimizer.step()       # Update parameters
+            optimizer.zero_grad()  # Reset gradients for next accumulation
 \end{pseudocode}
 
 \begin{keyconcept}
-  Dividing the loss by \texttt{grad\_accml\_steps} ensures that the
-  effective gradient magnitude is the same as with a true large batch.
-  Without this division, gradients would be too large by a factor of
-  \texttt{grad\_accml\_steps}.
+  Dividing the loss by \texttt{grad\_accum\_steps} ensures that the effective gradient magnitude is the same as with a true large batch. Without this division, the accumulated gradient would be $\texttt{grad\_accum\_steps}$ times too large, effectively multiplying the learning rate by that factor and potentially causing training instability.
 \end{keyconcept}
+
+The effective batch size is then:
+\[
+  \text{effective\_batch\_size} = \text{micro\_batch\_size} \times \text{grad\_accum\_steps}
+\]
+For example, if the GPU can fit 8 sequences per micro-batch, and the desired effective batch size is 512, setting \texttt{grad\_accum\_steps} = 64 achieves the same gradient update as a single pass with 512 sequences.
 
 \section{Mixed Precision Training}
 
-Using \texttt{torch.autocast} with \textbf{bfloat16} (or float16):
+Training in standard 32-bit floating point (float32) uses substantial memory and compute. \textbf{Mixed precision training} reduces both by performing most forward and backward computations in a lower-precision format (float16 or bfloat16) while keeping a master copy of the weights in float32 for numerical stability.
 
-\begin{pseudocode}[Mixed Precision]
-\textbf{with} autocast(device\_type="cuda", dtype=bfloat16):\\
-\quad logits $\leftarrow$ model(batch)\\
-\quad loss $\leftarrow$ criterion(logits, targets)\\[3pt]
-loss.backward()\\
-optimizer.step()
+\subsection{Why Not Train Entirely in Float16?}
+
+Float16 has a very limited dynamic range: the maximum representable value is about 65,504, and the smallest positive normal number is about $6 \times 10^{-8}$. Gradients in deep networks frequently exceed this range, causing overflow (becoming \texttt{inf}) or underflow (becoming zero). Training entirely in float16 would quickly produce NaN losses.
+
+\subsection{Bfloat16: A Better Alternative}
+
+\textbf{bfloat16} (brain floating point) uses the same 8 exponent bits as float32, but only 7 mantissa bits (versus float32's 23). This means bfloat16 has the \emph{same dynamic range} as float32---values up to $\approx 3.4 \times 10^{38}$---but only about 3 decimal digits of precision instead of 7. The matching exponent range eliminates the overflow/underflow issues of float16:
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Format} & \textbf{Exponent bits} & \textbf{Mantissa bits} & \textbf{Max value} \\
+\midrule
+float32 & 8 & 23 & $\approx 3.4 \times 10^{38}$ \\
+float16 & 5 & 10 & $\approx 65{,}504$ \\
+bfloat16 & 8 & 7 & $\approx 3.4 \times 10^{38}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+This makes bfloat16 the preferred format for mixed precision on modern hardware (A100, H100 GPUs). Note that bfloat16 is \emph{not} a strict subset of float32---it has less precision but the same range.
+
+\subsection{Autocast and GradScaler}
+
+PyTorch provides two key tools for mixed precision:
+
+\textbf{torch.autocast} is a context manager that automatically casts operations to the appropriate dtype. Inside the autocast context, matmuls and convolutions run in bfloat16 (saving memory and time), while operations like softmax, layer normalization, and loss computation remain in float32 (preserving numerical stability). The casting decisions are made \emph{per-operation} based on a curated list of safe conversions.
+
+\textbf{torch.amp.GradScaler} (only needed for float16, not bfloat16) scales the loss before calling \texttt{.backward()} to prevent float16 gradient underflow. If any gradients contain \texttt{inf} or \texttt{NaN}, the scaler skips the optimizer step entirely and reduces the scale factor for future iterations.
+
+\begin{pseudocode}[Mixed Precision Training]
+def train_mixed_precision(model: nn.Module, dataloader: DataLoader,
+                          optimizer: optim.Optimizer,
+                          device: str = "cuda") -> None:
+    scaler = GradScaler()              # Only needed for float16
+    model.train()
+
+    for batch in dataloader:
+        # Cast inputs to device
+        input_ids = batch.input_ids.to(device)    # [batch, seq_len]
+        target_ids = batch.target_ids.to(device)  # [batch, seq_len]
+
+        # Forward pass under autocast: ops run in bfloat16 where safe
+        with autocast(device_type=device, dtype=torch.bfloat16):
+            logits = model(input_ids)
+            # logits: [batch, seq_len, vocab_size]
+            loss = cross_entropy(logits.view(-1, vocab_size),
+                                 target_ids.view(-1))
+
+        # Backward pass: GradScaler handles float16 gradient scaling
+        # (For bfloat16, scaler is effectively a no-op)
+        scaler.scale(loss).backward()
+
+        # Optimizer step: unscale gradients, then update parameters
+        scaler.step(optimizer)
+        scaler.update()
+        optimizer.zero_grad()
 \end{pseudocode}
 
 \begin{keyconcept}
-  Mixed precision stores weights in float32 but computes forward/backward
-  passes in bfloat16, halving memory usage and often doubling throughput
-  on modern GPUs. Bfloat16 has the same dynamic range as float32 (8 exponent
-  bits), avoiding the overflow/underflow issues of float16.
+  Mixed precision stores a \textbf{master copy} of weights in float32 but computes forward/backward passes in bfloat16 or float16, nearly halving memory usage and often doubling throughput on modern GPUs. The key insight is that most deep learning operations tolerate reduced precision during computation, but the weight updates need full float32 precision to avoid drift. The autocast context manager makes per-operation casting decisions automatically, and GradScaler handles gradient scaling for float16 (bfloat16's matching exponent range makes scaling unnecessary).
 \end{keyconcept}
+
+\section{Training Stability and Common Pitfalls}
+
+Training a large transformer from scratch is delicate. Small misconfigurations can lead to divergent training, NaN losses, or models that learn nothing useful. This section catalogs the most common pitfalls and how to avoid them.
+
+\begin{keyconcept}[Training Stability Checklist]
+  \textbf{Common pitfalls and their remedies:}
+  \begin{itemize}
+    \item \textbf{Loss spikes early in training}: Likely too high a learning rate. Reduce the peak LR or increase warmup steps. A warmup of 10\% of total steps is a good default.
+    \item \textbf{Loss goes to NaN}: Usually caused by numerical overflow. Check that embeddings and output projections are properly initialized, enable mixed precision with autocast, and consider gradient clipping (e.g., \texttt{clip\_grad\_norm\_} with \texttt{max\_norm=1.0}).
+    \item \textbf{Loss plateaus at $\log V$}: The model is not learning---all predictions are uniform. Verify that targets are correctly shifted, that the loss function is applied to the right logits, and that the optimizer is actually updating parameters.
+    \item \textbf{Gradient explosion}: Add gradient clipping. In PyTorch: \texttt{torch.nn.utils.clip\_grad\_norm\_(model.parameters(), max\_norm=1.0)}. This caps the total gradient norm, preventing any single update from being too large.
+    \item \textbf{Memory OOM}: Reduce batch size and compensate with gradient accumulation. Enable mixed precision (bfloat16) which roughly halves activation memory.
+    \item \textbf{Instability with large models}: Ensure residual projections are scaled (GPT-2 scales by $1/\sqrt{2N}$), and consider using pre-norm instead of post-norm architecture.
+  \end{itemize}
+\end{keyconcept}
+
+\subsection{Gradient Clipping}
+
+Even with a well-tuned learning rate schedule, gradients can occasionally spike, especially early in training or on unusual data. \textbf{Gradient clipping} caps the norm of the gradient vector before the optimizer step:
+
+\begin{pseudocode}[Gradient Clipping]
+def clip_gradients(model: nn.Module, max_norm: float = 1.0) -> float:
+    # Returns the gradient norm before clipping (useful for monitoring)
+    total_norm = torch.nn.utils.clip_grad_norm_(
+        model.parameters(), max_norm
+    )
+    return total_norm.item()
+\end{pseudocode}
+
+If $\|\nabla\| > \text{max\_norm}$, the gradient is rescaled to have norm exactly $\text{max\_norm}$, preserving the direction but limiting the step size. This is called \textbf{norm clipping} and is preferred over per-parameter value clipping because it preserves the relative scale of gradients across parameters.
+
+\subsection{Monitoring Training}
+
+Always log the following during pretraining:
+\begin{itemize}
+  \item \textbf{Training loss} (per step and averaged over windows): should decrease smoothly.
+  \item \textbf{Learning rate}: verify the schedule is being applied correctly.
+  \item \textbf{Gradient norm}: spikes indicate instability; values near zero indicate vanishing gradients.
+  \item \textbf{Perplexity}: $e^{\mathcal{L}}$, an intuitive measure of model performance. A perplexity of 10 means the model is, on average, as uncertain as if choosing uniformly among 10 tokens.
+\end{itemize}
+
+An initial loss of $\approx \log(\text{vocab\_size})$ (about 10.8 for GPT-2's vocabulary) confirms the model is starting from a sensible random baseline. A well-trained GPT-2 small model should achieve a training perplexity below 20 on diverse English text.
 
 \section*{Review Questions}
 
 \begin{reviewquestion}[1]
-  Why does gradient accumulation divide the loss by the number of
-  accumulation steps? What would happen to the effective learning rate
-  without this division?
+  Why does cross-entropy loss use the raw logits (before softmax) rather than probabilities as input? What numerical issue does this avoid?
 \end{reviewquestion}
 
 \begin{reviewquestion}[2]
-  Sketch the warmup + cosine decay learning rate curve. What happens if
-  you skip warmup and start at max\_lr immediately?
+  A model with a vocabulary of 50,000 tokens starts training and has an initial loss of 2.0. Is this expected? What does this tell you about the model's parameters?
 \end{reviewquestion}
 
 \begin{reviewquestion}[3]
-  Why does bfloat16 have a wider dynamic range than float16? How many
-  exponent bits does each format use?
+  Explain the difference between Adam and AdamW. Why does AdamW produce better generalization for transformer models?
 \end{reviewquestion}
+
+\begin{reviewquestion}[4]
+  What are the two moving averages maintained by Adam, and what role does each play in the update rule?
+\end{reviewquestion}
+
+\begin{reviewquestion}[5]
+  Sketch the warmup + cosine decay learning rate curve. What happens if you skip warmup and start at max\_lr immediately?
+\end{reviewquestion}
+
+\begin{reviewquestion}[6]
+  Why does gradient accumulation divide the loss by the number of accumulation steps? What would happen to the effective learning rate without this division?
+\end{reviewquestion}
+
+\begin{reviewquestion}[7]
+  Why does bfloat16 have a wider dynamic range than float16? How many exponent bits does each format use? Why does this matter for training stability?
+\end{reviewquestion}
+
+\begin{reviewquestion}[8]
+  GPT-2 initializes weights from $\mathcal{N}(0, 0.02)$. What would likely happen if you used $\mathcal{N}(0, 1.0)$ instead? What about $\mathcal{N}(0, 0.001)$?
+\end{reviewquestion}
+
+\begin{reviewquestion}[9]
+  What is the purpose of gradient clipping? Describe the difference between norm clipping and value clipping, and explain which is generally preferred and why.
+\end{reviewquestion}
+
+\begin{reviewquestion}[10]
+  Explain what role a GradScaler plays in mixed precision training. Why is it necessary for float16 but not for bfloat16?
+\end{reviewquestion}
+
+\begin{reviewquestion}[11]
+  What is perplexity, and how is it related to cross-entropy loss? If a model achieves a loss of 3.0, what is its perplexity?
+\end{reviewquestion}
+
+\begin{reviewquestion}[12]
+  During training, you observe that the loss decreases smoothly for the first 10,000 steps, then suddenly jumps to NaN. List three possible causes and how you would diagnose each one.
+\end{reviewquestion}
+
+\begin{reviewquestion}[13]
+  Why does the cosine decay schedule reduce the learning rate more slowly at the beginning and end of training, but more rapidly in the middle? How does this differ from a linear decay?
+\end{reviewquestion}
+
+\section*{Problems}
+
+\begin{problem}[1]
+  \textbf{Implement a cosine annealing learning rate scheduler.} Write a function \texttt{get\_lr(step, warmup\_steps, max\_lr, min\_lr, total\_steps)} that returns the learning rate for any given training step. Then plot the schedule for \texttt{warmup\_steps=100}, \texttt{max\_lr=3e-4}, \texttt{min\_lr=3e-5}, and \texttt{total\_steps=1000}. Verify the curve starts near zero, reaches \texttt{max\_lr} at step 100, and decays smoothly to \texttt{min\_lr}.
+\end{problem}
+
+\begin{problem}[2]
+  \textbf{Implement gradient accumulation in a training loop.} Starting from a basic training loop, modify it to accumulate gradients over \texttt{grad\_accum\_steps} micro-batches before calling \texttt{optimizer.step()}. Verify that the effective batch size equals \texttt{micro\_batch\_size * grad\_accum\_steps} by checking that the gradient norm is the same (up to floating point error) as a single forward-backward pass with the full effective batch.
+\end{problem}
+
+\begin{problem}[3]
+  \textbf{Compare initialization scales.} Train a small GPT model (e.g., 2 layers, 128 embedding dimension) on a small text corpus with three different initialization standard deviations: $\sigma = 0.01$, $\sigma = 0.02$ (GPT-2 default), and $\sigma = 0.1$. For each, record the training loss over 1,000 steps and plot all three curves. Describe the qualitative differences in training dynamics.
+\end{problem}
+
+\begin{problem}[4]
+  \textbf{Implement mixed precision training.} Add \texttt{torch.autocast} and \texttt{GradScaler} to a training loop. Measure the peak GPU memory usage and training throughput (tokens per second) with and without mixed precision. Report the memory savings and speedup ratio.
+\end{problem}
+
+\begin{problem}[5]
+  \textbf{Implement a training loop with all components.} Combine cross-entropy loss, AdamW, cosine decay with warmup, gradient accumulation, gradient clipping, and mixed precision into a single training function. Train a small GPT model on a dataset like TinyStories, logging loss, learning rate, and gradient norm every 100 steps. Identify the point where the loss starts to plateau and discuss whether modifications to the schedule are warranted.
+\end{problem}
