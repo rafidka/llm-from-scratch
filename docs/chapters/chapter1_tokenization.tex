@@ -55,13 +55,16 @@ Subword (BPE) & She, walk, ed, quickly, . & [184, 3082, 753, 2187, 12] \\
 \section{SimpleTokenizer}
 
 The simplest tokenizer splits text on whitespace and looks up each token
-in a vocabulary:
+in a vocabulary. This whitespace splitting is the simplest form of
+\emph{pre-tokenization}---the step that breaks raw text into chunks before
+subword algorithms operate on them. More sophisticated tokenizers use a
+regex pattern instead (see~\S\ref{sec:pretok}).
 
-\begin{pseudocode}[SimpleTokenizer: encode]
+\begin{pseudocode}[SimpleTokenizer: encode and decode]
 class SimpleTokenizer:
     def __init__(self, vocab: dict[str, int]):
-        self.vocab = vocab                          # token -> ID
-        self.reverse_vocab = {v: k for k, v in vocab.items()}  # ID -> token
+        self.vocab = vocab                          # token string -> ID
+        self.reverse_vocab = {v: k for k, v in vocab.items()}  # ID -> token string
         self.unk_id = vocab.get("<|unk|>", 0)
         self.eos_id = vocab.get("<|eos|>", 1)
 
@@ -71,9 +74,19 @@ class SimpleTokenizer:
         for token in tokens:
             ids.append(self.vocab.get(token, self.unk_id))
         return ids                                 # e.g. [464, 3797, 5832]
+
+    def decode(self, ids: list[int]) -> str:
+        tokens = [self.reverse_vocab.get(i, "<|unk|>") for i in ids]
+        return " ".join(tokens)                    # concatenate with spaces
 \end{pseudocode}
 
 \begin{keyconcept}
+  \textbf{Decoding} reverses the encoding process: map each ID back to its
+  token string and concatenate. For the SimpleTokenizer, this is
+  straightforward---just join with spaces. For BPE, decoding concatenates
+  subword strings and removes the special end-of-word markers that BPE
+  uses internally.
+
   Special tokens serve important roles:
   \texttt{<|unk|>} replaces any word not in the vocabulary, giving the model
   a way to represent unseen words rather than crashing;
@@ -87,6 +100,50 @@ Byte-Pair Encoding starts from characters and iteratively merges the most
 frequent adjacent pair, building up longer and longer subword tokens.
 The result is a vocabulary that grows from individual characters to
 common multi-character sequences, all driven by what the data demands.
+
+\subsection{Pre-Tokenization\label{sec:pretok}}
+
+Before BPE can merge pairs, we must first split the raw text into
+\emph{words} (or word-like chunks). This pre-tokenization step prevents
+BPE from merging characters across word boundaries---we don't want ``he''
+in ``the cat'' to merge into the same token as the word ``he.''  The
+SimpleTokenizer above used whitespace splitting; real tokenizers use a
+more refined regex pattern. GPT-2's pre-tokenizer, for example, splits
+text so that contractions, numbers, and punctuation become separate
+chunks:
+
+\begin{pseudocode}[Pre-Tokenization Regex (GPT-2)]
+import re
+
+GPT2_PATTERN = r"""'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
+def pretokenize(text: str) -> list[str]:
+    return re.findall(GPT2_PATTERN, text)
+# Example: "I'm happy." -> ["I", "'m", " happy", "."]
+\end{pseudocode}
+
+Pre-tokenization determines the \emph{units} that BPE operates on. BPE
+merges happen \emph{within} each pre-tokenized chunk, never across chunk
+boundaries. This keeps tokens semantically coherent and speeds up training
+significantly (the algorithm only counts pairs within each chunk, not
+across the entire raw character stream).
+
+\subsection{Byte-Level BPE}
+
+The BPE variant used by GPT-2 and most modern tokenizers is
+\emph{byte-level BPE}. Instead of starting from Unicode characters (which
+number in the hundreds of thousands), it starts from the 256 possible byte
+values. Any input string---whether English, Chinese, emoji, or binary
+data---can be represented as a sequence of bytes, so the initial
+vocabulary is exactly 256 entries and every possible input is
+representable without an \texttt{<|unk|>} token.
+
+In practice, GPT-2 maps each byte value to a printable character (e.g.,
+byte 32 becomes the space character `` ''). This mapping is called the
+\emph{byte-to-unicode} table. BPE merges then operate on these byte-level
+characters exactly as described above. The resulting vocabulary consists
+of the 256 byte-level base tokens plus the learned merge tokens plus
+special tokens, yielding GPT-2's total vocabulary size of 50,257.
 
 \subsection{BPE Training}
 
@@ -114,7 +171,10 @@ entry per merge.
   \textbf{Round 1}: Count adjacent pairs weighted by frequency.
   The pair (l, o) appears $2 + 5 = 7$ times; (o, w) appears $2 + 5 = 7$ times;
   (w, e) appears 5 times; (e, s) appears 5 times; (s, t) appears 5 times.
-  Ties are broken arbitrarily---suppose we pick (l, o). We merge into ``lo'':
+  Ties are broken arbitrarily---in practice, the tie-breaking
+  strategy can affect tokenizer quality, so implementations use
+  deterministic rules (e.g., alphabetical order of the pair) to ensure
+  reproducibility. Here, suppose we pick (l, o). We merge into ``lo'':
 
   \begin{center}
   \begin{tabular}{lll}
@@ -198,6 +258,29 @@ def encode_bpe(text: str, merges: list[tuple[str, str]], vocab: dict[str, int]) 
   Its vocabulary contains 50,257 tokens.
 \end{keyconcept}
 
+\begin{keyconcept}[Encoding Efficiency]
+  The \texttt{encode\_bpe} pseudocode above iterates over all merge rules
+  for every word, giving a cost of $O(M \times L)$ per word where $M$ is
+  the number of merges and $L$ is the word length. Real implementations
+  (including GPT-2's) are more efficient: instead of scanning all merges,
+  they repeatedly find the highest-priority merge \emph{currently present}
+  in the word using a priority queue, reducing the cost to $O(L^2 \log L)$.
+  The simple replay approach is pedagogically clear but not suitable for
+  production use.
+\end{keyconcept}
+
+\begin{keyconcept}[Choosing Vocabulary Size]
+  How many merges should you perform? This is controlled by the
+  \texttt{num\_merges} hyperparameter. Typical values range from 30{,}000 to
+  100{,}000. More merges means a larger vocabulary (so shorter sequences)
+  but also more memory for the embedding table and a larger softmax at the
+  output layer. Fewer merges means longer sequences (more compute for
+  attention) but a smaller model. After training, the tokenizer is saved
+  as two files: the merge rules list (ordered) and the vocabulary mapping
+  (token $\rightarrow$ ID). To tokenize new text, you load both files and
+  apply the \texttt{encode\_bpe} procedure.
+\end{keyconcept}
+
 \section{Next-Token Prediction Dataset}
 
 Language models are trained via \emph{next-token prediction}: given a
@@ -220,6 +303,7 @@ class SlidingWindowDataset:
 
     def __len__(self) -> int:
         return (len(self.token_ids) - self.max_length) // self.stride
+        # Ensures end+1 <= len(token_ids), so no out-of-bounds access
 \end{pseudocode}
 
 \begin{keyconcept}
