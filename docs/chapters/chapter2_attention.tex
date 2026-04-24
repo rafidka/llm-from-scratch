@@ -45,10 +45,12 @@ of all input embeddings, weighted by how relevant each position is to position $
 
 \begin{pseudocode}[Simplified Self-Attention (No Learnable Parameters)]
 def simplified_self_attention(X: Tensor) -> Tensor:
-    # X: [seq_len, embed_dim]
-    scores = X @ X.transpose(-2, -1)  # [seq_len, embed_dim] @ [embed_dim, seq_len] -> [seq_len, seq_len]
-    attn_weights = softmax(scores, dim=-1)  # [seq_len, seq_len]
-    output = attn_weights @ X  # [seq_len, seq_len] @ [seq_len, embed_dim] -> [seq_len, embed_dim]
+    # X: [batch, seq_len, embed_dim]
+    # Note: for clarity, the equations above omit the batch dimension.
+    # The implementation includes it for consistency with later sections.
+    scores = X @ X.transpose(-2, -1)  # [batch, seq_len, embed_dim] @ [batch, embed_dim, seq_len] -> [batch, seq_len, seq_len]
+    attn_weights = softmax(scores, dim=-1)  # [batch, seq_len, seq_len]
+    output = attn_weights @ X  # [batch, seq_len, seq_len] @ [batch, seq_len, embed_dim] -> [batch, seq_len, embed_dim]
     return output
 \end{pseudocode}
 
@@ -102,7 +104,24 @@ keys, and values:
           weight on entries whose keys better match the query.
   \end{itemize}
   Unlike a standard database lookup that returns a single hard match, attention
-  returns a \emph{soft} combination of all entries.
+  returns a \emph{soft} combination of all entries. Consider the sentence:
+  ``The \textbf{cat} sat on the \textbf{mat} because \textbf{it} was tired.''
+  When computing attention for ``it,'' the query encodes ``I need to resolve
+  this reference.'' The key for ``cat'' encodes animacy, while the key for
+  ``mat'' encodes inanimacy. The softmax will assign higher weight to ``cat,''
+  and the output at ``it'' will be dominated by ``cat'''s value.
+\end{keyconcept}
+
+\begin{keyconcept}[Why three separate projections?]
+  One could share parameters by using $W_K = W_V$ or even $W_Q = W_K = W_V$.
+  Separate projections allow the model to learn \emph{different subspaces} for
+  querying versus storing information. The query projection defines a
+  ``search direction'' in embedding space, while the key projection defines
+  a ``labeling direction.'' If they shared parameters, the model could not
+  learn to search for different properties than those it labels---severely
+  limiting expressiveness. In practice, sharing $K$ and $V$ (as in
+  cross-attention where $K$ and $V$ come from the same source) is common,
+  but $Q$ is almost always separate.
 \end{keyconcept}
 
 The attention computation with learnable projections is:
@@ -112,15 +131,22 @@ The attention computation with learnable projections is:
 \]
 
 where $Q = X W_Q$, $K = X W_K$, and $V = X W_V$. The division by $\sqrt{d_k}$
-is the \emph{scaling} that gives this variant its name.
+is the \emph{scaling} that gives this variant its name. In the standard setup,
+$d_k = d_v = d_{\text{model}}$ for single-head attention, and $d_k = d_v =
+d_{\text{model}} / h$ for multi-head attention with $h$ heads. The projection
+matrices have shape $W_Q, W_K, W_V \in \mathbb{R}^{d_{\text{model}} \times d_k}$
+and $W_V \in \mathbb{R}^{d_{\text{model}} \times d_v}$.
 
 \begin{pseudocode}[Scaled Dot-Product Attention]
 def scaled_dot_product_attention(Q: Tensor, K: Tensor, V: Tensor) -> Tensor:
     # Q: [batch, seq_len, d_k], K: [batch, seq_len, d_k], V: [batch, seq_len, d_v]
+    # In single-head: d_k = d_v = embed_dim
+    # In multi-head: d_k = d_v = embed_dim // n_heads
     d_k = Q.size(-1)
     scores = Q @ K.transpose(-2, -1)  # [batch, seq_len, d_k] @ [batch, d_k, seq_len] -> [batch, seq_len, seq_len]
     scaled_scores = scores / math.sqrt(d_k)  # [batch, seq_len, seq_len]
     attn_weights = softmax(scaled_scores, dim=-1)  # [batch, seq_len, seq_len]
+    attn_weights = dropout(attn_weights, p=dropout_p, training=self.training)  # [batch, seq_len, seq_len]
     output = attn_weights @ V  # [batch, seq_len, seq_len] @ [batch, seq_len, d_v] -> [batch, seq_len, d_v]
     return output
 \end{pseudocode}
@@ -136,6 +162,21 @@ def scaled_dot_product_attention(Q: Tensor, K: Tensor, V: Tensor) -> Tensor:
   have magnitude $\sim\!8$, and softmax would saturate, producing
   near-one-hot vectors and gradient magnitudes on the order of $0.001$
   instead of $\sim\!0.1$.
+\end{keyconcept}
+
+\begin{keyconcept}[Softmax numerical stability]
+  The softmax function $\text{softmax}(x_i) = \frac{e^{x_i}}{\sum_j e^{x_j}}$
+  can overflow for large values of $x_i$. In practice, we always compute
+  softmax in a numerically stable way by subtracting the maximum value
+  first:
+  \[
+    \text{softmax}(x_i) = \frac{e^{x_i - \max(x)}}{\sum_j e^{x_j - \max(x)}}
+  \]
+  This shifts all values to be $\leq 0$ before exponentiating, preventing
+  overflow. PyTorch's \texttt{torch.softmax} handles this automatically, but
+  if you implement softmax from scratch (as in Problem~2), you must include
+  this max-subtraction step---without it, $e^{x_i}$ overflows for typical
+  network activations.
 \end{keyconcept}
 
 \section{Causal (Masked) Self-Attention}
@@ -195,14 +236,15 @@ def causal_self_attention(Q: Tensor, K: Tensor, V: Tensor) -> Tensor:
 \end{pseudocode}
 
 \begin{keyconcept}
-  Note: we use
-  \texttt{masked\_fill(mask, -inf)} rather than multiplying,
-  because $0 \times (-\infty) = \text{NaN}$.
-  \texttt{masked\_fill} is differentiable and avoids NaN entirely.
-  In practice, some implementations add the mask as an additive bias
-  ($+\text{mask}$) where the mask contains $0$ for allowed positions
-  and $-\infty$ for blocked positions---this is equivalent to
-  \texttt{masked\_fill}.
+  We use \texttt{masked\_fill} to directly set blocked positions to
+  $-\infty$ in the score matrix. This matters because the alternative---multiplying
+  a 0/1 mask into the scores---would produce NaN when 0 is multiplied by
+  $-\infty$: $0 \times (-\infty) = \text{NaN}$. The \texttt{masked\_fill}
+  operation sidesteps this by never computing $0 \times (-\infty)$; it simply
+  replaces the blocked positions with $-\infty$ before softmax is applied.
+  Some implementations add the mask as an additive bias ($+\text{mask}$)
+  where the mask contains $0$ for allowed positions and $-\infty$ for blocked
+  positions---this is equivalent to \texttt{masked\_fill}.
 \end{keyconcept}
 
 \section{Multi-Head Attention}
@@ -221,9 +263,17 @@ $d_k = d_{\text{model}} / h$. Each head can attend to different aspects of the
 input independently. The outputs are concatenated and passed through a final
 linear projection $W_O$ that lets heads interact and mix information.
 
+The projection matrices have the following shapes:
+\begin{itemize}
+  \item $W_Q, W_K \in \mathbb{R}^{d_{\text{model}} \times d_k}$ (or $\mathbb{R}^{d_{\text{model}} \times d_{\text{model}}}$ when combined for all heads)
+  \item $W_V \in \mathbb{R}^{d_{\text{model}} \times d_v}$ (usually $d_v = d_k$)
+  \item $W_O \in \mathbb{R}^{d_{\text{model}} \times d_{\text{model}}}$ (projects concatenated heads back to embed dim)
+\end{itemize}
+
 \begin{pseudocode}[Multi-Head Attention]
 def multi_head_attention(X: Tensor, n_heads: int) -> Tensor:
     # X: [batch, seq_len, embed_dim]
+    # W_Q, W_K, W_V: [embed_dim, embed_dim], W_O: [embed_dim, embed_dim]
     batch, seq_len, embed_dim = X.shape
     d_k = embed_dim // n_heads
 
@@ -274,31 +324,8 @@ same total dimensionality.
 
 The Q/K/V formulation can be understood through the lens of a \emph{soft
 dictionary}: a differentiable generalization of a hash table or database
-lookup.
-
-In a regular dictionary, you provide a query and get back the value associated
-with the single key that exactly matches. Attention performs a ``soft'' version
-of this: the query is compared to all keys simultaneously, and the result is
-a weighted combination of all values, where the weight for each value is
-proportional to how well its key matches the query.
-
-\begin{keyconcept}[Concrete example: soft dictionary lookup]
-  Consider a sentence: ``The \textbf{cat} sat on the \textbf{mat} because it
-  was tired.'' When computing attention for the pronoun ``it'':
-  \begin{itemize}
-    \item The \textbf{query} from ``it'' encodes: ``I need to resolve this
-          reference---what does `it' refer to?''
-    \item The \textbf{keys} for ``cat'' and ``mat'' encode descriptions of
-          each noun (animacy, syntactic role, etc.).
-    \item The \textbf{values} carry the semantic content of each noun.
-    \item Because ``cat'' is animate and ``mat'' is not, the learned key for
-          ``cat'' will better match the query from ``it'' (which expects an
-          animate referent). The softmax will assign higher weight to ``cat'',
-          and the output at position ``it'' will be dominated by ``cat'''s
-          value.
-  \end{itemize}
-  This is a learned, soft lookup---the model discovers these patterns from data.
-\end{keyconcept}
+lookup. The database analogy from Section~2 applies here too, but now we can
+see how it plays out \emph{across layers} of a deep network.
 
 In a standard dictionary, the lookup returns exactly one value (hard match).
 Attention returns a distribution over values (soft match). This softness is
@@ -344,8 +371,8 @@ Modern solutions include:
 KV Cache & Avoids recomputing past K/V during generation \\
 Grouped Query Attention (GQA) & Reduces KV head count \\
 Flash Attention & IO-aware algorithm, same $O(n^2)$ but faster \\
-Sliding Window Attention & Limits attention to local context \\
-Linear Attention & Approximates softmax for $O(n)$ complexity \\
+Sliding Window Attention & Limits attention to local context of width $w$, reducing to $O(nw)$ \\
+Linear Attention & Approximates softmax for $O(n)$ time and space \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -370,7 +397,25 @@ Linear Attention & Approximates softmax for $O(n)$ complexity \\
   complexity remains $O(n^2)$, but the wall-clock time is dramatically
   reduced because it avoids the bottleneck of writing and reading the massive
   attention matrix from slow memory.
+
+  \textbf{Sliding Window Attention} restricts each position to attend only to
+  the $w$ most recent positions, reducing both time and space to $O(nw)$. This
+  trades global context for efficiency; some models combine it with a few
+  global attention tokens to retain long-range information.
+
+  \textbf{Linear Attention} replaces the softmax with a kernel-based
+  approximation $\text{sim}(q, k) = \phi(q)^\top \phi(k)$ that allows the
+  computation to be reordered as $\phi(V)(\phi(K)^\top \phi(Q))$, eliminating
+  the $n \times n$ matrix entirely. The result is $O(n)$ time and space, but
+  the approximation quality is still an open research question.
 \end{keyconcept}
+
+The attention mechanism you have built in this chapter---scaled dot-product
+attention with causal masking, organized into multiple heads---is the core
+computational primitive of the transformer. The next chapter assembles this
+primitive into a complete architecture: the GPT-2 model, wrapping attention
+in residual connections, layer normalization, and feed-forward layers to form
+the full transformer block.
 
 \section*{Review Questions}
 
@@ -447,6 +492,18 @@ Linear Attention & Approximates softmax for $O(n)$ complexity \\
   sacrifice?
 \end{reviewquestion}
 
+\begin{reviewquestion}[13]
+  Why are three separate projection matrices ($W_Q$, $W_K$, $W_V$) used
+  instead of a single shared projection? What capability would be lost
+  if $W_K = W_V$?
+\end{reviewquestion}
+
+\begin{reviewquestion}[14]
+  When implementing softmax from scratch, why must you subtract the
+  maximum value before exponentiating? What would happen numerically
+  with $d_k = 64$ and unscaled dot products if you skipped this step?
+\end{reviewquestion}
+
 \section*{Problems}
 
 \begin{problem}[1]
@@ -454,7 +511,7 @@ Linear Attention & Approximates softmax for $O(n)$ complexity \\
   Implement simplified self-attention using only basic tensor operations
   (matrix multiplication and softmax---no \texttt{nn.Module} or learned
   parameters). Your function should take an input tensor of shape
-  $[\text{seq\_len}, \text{embed\_dim}]$ and return an output tensor of the
+  $[\text{batch}, \text{seq\_len}, \text{embed\_dim}]$ and return an output tensor of the
   same shape. Verify that each row of the attention weight matrix sums to 1.
 \end{problem}
 
@@ -463,9 +520,11 @@ Linear Attention & Approximates softmax for $O(n)$ complexity \\
   Implement scaled dot-product attention with learnable $W_Q$, $W_K$, $W_V$
   projections as \texttt{nn.Linear} modules. Write a function
   \texttt{scaled\_dot\_product\_attention(Q, K, V)} that computes
-  $\text{softmax}(QK^\top / \sqrt{d_k})V$. Verify that removing the
-  $\sqrt{d_k}$ scaling causes softmax to produce near-one-hot vectors
-  for large $d_k$ (e.g., $d_k = 256$).
+  $\text{softmax}(QK^\top / \sqrt{d_k})V$. Implement softmax from scratch
+  (with max-subtraction for numerical stability) rather than using
+  \texttt{torch.softmax}. Verify that removing the $\sqrt{d_k}$ scaling
+  causes softmax to produce near-one-hot vectors for large $d_k$ (e.g.,
+  $d_k = 256$).
 \end{problem}
 
 \begin{problem}[3]
