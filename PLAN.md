@@ -103,7 +103,7 @@ Evolving our GPT-2 toward a modern LLM (LLaMA-style):
 - [x] **SwiGLU** — Replace GELU FFN with SwiGLU activation
 - [x] **Grouped Query Attention (GQA)** — Implement KV head sharing
 - [x] **KV Cache** — Implement efficient autoregressive inference
-- [ ] **Flash Attention** — Understand the IO-aware algorithm (implement simplified version,
+- [x] **Flash Attention** — Understand the IO-aware algorithm (implement simplified version,
       use the real thing via PyTorch `scaled_dot_product_attention`)
 - [ ] **Sliding window attention** — Limit attention to local context, reduce complexity
 - [ ] **Linear attention** — Approximate softmax with kernel trick for O(n) complexity

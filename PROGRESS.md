@@ -843,4 +843,32 @@
 - [x] **KV Cache** — Implement efficient autoregressive inference
 
 ### Open questions
-- Next: Flash Attention
+- Next: Sliding window attention
+
+---
+
+## Session 28 — 2026-04-25 — Flash Attention
+
+### What we covered
+- Studied the Flash Attention algorithm (Dao et al., 2022): IO-aware tiling that avoids materializing the O(n²) attention matrix in HBM
+- Understood the memory hierarchy on GPUs: SRAM (~20MB, ~19TB/s) vs HBM (~80GB, ~2TB/s)
+- Learned the online softmax trick (Milakov & Gimelshein, 2018) that enables computing softmax incrementally over tiles without storing the full matrix
+- Created a benchmark comparing our custom `scaled_dot_product_attention` vs PyTorch's `F.scaled_dot_product_attention` vs the `flash-attn` library
+- Key benchmark considerations: 4D input shape `[batch, num_heads, seq_len, head_dim]`, bf16/fp16 dtype (Flash Attention doesn't activate for fp32), CUDA events for async timing, warmup iterations, `torch.cuda.reset_peak_memory_stats` for accurate memory measurement
+
+### Key learnings
+- Standard attention writes the n×n score matrix to HBM 3 times (compute, softmax, V multiply) — this is the bottleneck, not the FLOPs
+- Flash Attention loads tiles of Q, K, V into SRAM, computes attention entirely on-chip, writes only the output to HBM — O(n) memory instead of O(n²)
+- Online softmax: track running `max_i` and `sum_i` across tiles; rescale previous accumulations when a new tile has a larger max — mathematically exact, not an approximation
+- `F.scaled_dot_product_attention` auto-dispatches to Flash Attention on CUDA when inputs are half-precision and head_dim ≤ 256
+- The `flash-attn` library uses a different tensor layout: `[batch, seq_len, num_heads, head_dim]` (BTHD) vs PyTorch's `[batch, num_heads, seq_len, head_dim]` (BHTD)
+- Flash Attention is not an approximation — it produces the same result as standard attention, just with fewer memory reads/writes
+
+### Code written
+- `examples/attention/flash_attention.py` — Benchmark comparing our implementation, PyTorch's `F.scaled_dot_product_attention`, and the `flash-attn` library across dtypes and sequence lengths
+
+### PLAN.md items completed
+- [x] **Flash Attention** — Understand the IO-aware algorithm, benchmark against PyTorch and flash-attn library
+
+### Open questions
+- Next: Sliding window attention
