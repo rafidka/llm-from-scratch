@@ -120,6 +120,15 @@
                 "--max_tokens_per_batch",
                 "4096",
             ]
+        },
+        {
+            "name": "kv_cache",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/attention/kv_cache.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": []
         }
     ]
 }

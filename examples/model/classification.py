@@ -17,5 +17,5 @@ model = GPTForClassification(
 )
 input_ids = torch.randint(0, 1000, (batch, seq_len))
 
-output = model(input_ids)
+output = model(input_ids).output
 print(output.shape)

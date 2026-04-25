@@ -60,7 +60,7 @@ class GPTForCausalLMTrainer(GPTTrainer[GPTForCausalLM]):
         attention_mask: Tensor | None = None,
     ):
         with self.mp_context:
-            logits = self.model(input_ids, attention_mask)
+            logits = self.model(input_ids, attention_mask).output
             loss = self.loss_fn(logits.flatten(0, 1), target_ids.flatten(0, 1))
         (loss / self.grad_accml_steps).backward()
 

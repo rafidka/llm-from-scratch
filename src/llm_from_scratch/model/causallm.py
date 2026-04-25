@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 import torch
 from torch import nn
 
-from llm_from_scratch.model.base import GPT
+from llm_from_scratch.model.base import GPT, GPTOutput
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -43,11 +43,17 @@ class GPTForCausalLM(GPT):
         self.lm_head.weight = self.embeddings.token.weight
 
     def forward(
-        self, token_ids: "Tensor", attn_mask: "Tensor | None" = None
-    ) -> "Tensor":
-        out = super().forward(token_ids, attn_mask)
-        logits = self.lm_head(out)
-        return logits  # shape [batch, seq_len, vocab_size]
+        self,
+        token_ids: "Tensor",
+        attn_mask: "Tensor | None" = None,
+        kv_caches: list[tuple["Tensor", "Tensor"]] | None = None,
+    ) -> GPTOutput:
+        ret = super().forward(token_ids, attn_mask, kv_caches)
+        logits = self.lm_head(ret.output)
+        return GPTOutput(
+            logits,  # shape [batch, seq_len, vocab_size]
+            kv_caches=ret.kv_caches,
+        )
 
     @torch.no_grad()
     def generate(
@@ -60,46 +66,54 @@ class GPTForCausalLM(GPT):
         eos_token_id: int | None = None,
     ) -> "Tensor":
         # token_ids: [batch, seq_len]
-        # attn_mask: [batch, seq_len] or None
-        for _ in range(max_new_tokens):
-            if token_ids.shape[-1] >= self.max_seq_len:
-                token_ids = token_ids[:, -self.max_seq_len :]
-                if attn_mask is not None:
-                    attn_mask = attn_mask[:, -self.max_seq_len :]
+        kv_caches: list[tuple["Tensor", "Tensor"]] | None = None
+        generated = token_ids
 
-            logits = self.forward(token_ids, attn_mask)
-            last_logit = logits[:, -1, :]
+        for step in range(max_new_tokens):
+            if step == 0:
+                # First step: process the full prompt, populate the KV cache.
+                if token_ids.shape[-1] >= self.max_seq_len:
+                    token_ids = token_ids[:, -self.max_seq_len :]
+                    if attn_mask is not None:
+                        attn_mask = attn_mask[:, -self.max_seq_len :]
+                ret = self.forward(token_ids, attn_mask)
+                kv_caches = ret.kv_caches
+                logits = ret.output
+                last_logit = logits[:, -1, :]
+            else:
+                # Subsequent steps: pass only the new token with the KV cache.
+                # No need for attn_mask — the cache already has full context.
+                # Truncate cache if we've exceeded max_seq_len.
+                if kv_caches is not None and kv_caches[0][0].shape[2] >= self.max_seq_len:
+                    kv_caches = [
+                        (k[:, :, -self.max_seq_len + 1 :, :], v[:, :, -self.max_seq_len + 1 :, :])
+                        for k, v in kv_caches
+                    ]
+                ret = self.forward(next_tokens, kv_caches=kv_caches)
+                kv_caches = ret.kv_caches
+                logits = ret.output
+                last_logit = logits[:, -1, :]
 
             if temperature == 0:
-                # Temperature is zero; use greedy sampling.
                 next_tokens = last_logit.argmax(dim=-1, keepdim=True)
             else:
-                # Apply temperature and softmax to find probs.
                 probs = torch.softmax(last_logit / temperature, dim=-1)
-
                 if top_k:
-                    # top_k specified; apply it.
                     top_k_probs, top_k_indices = torch.topk(probs, k=top_k, dim=-1)
-
                     next_tokens = top_k_indices.gather(
-                        -1,  # dim
+                        -1,
                         torch.multinomial(top_k_probs, num_samples=1),
                     )
                 else:
                     next_tokens = torch.multinomial(probs, num_samples=1)
 
-            token_ids = torch.cat((token_ids, next_tokens), dim=-1)
-            if attn_mask is not None:
-                ones = torch.ones_like(next_tokens)
-                attn_mask = torch.cat((attn_mask, ones), dim=-1)
+            generated = torch.cat((generated, next_tokens), dim=-1)
 
             if eos_token_id is not None and (next_tokens == eos_token_id).all():
                 break
 
-        # Zero out all the tokens after EOS.
         if eos_token_id is not None:
-            # after_eos will be True on and after first EOS
-            after_eos = (token_ids == eos_token_id).cumsum(dim=1) >= 1
-            token_ids.masked_fill(after_eos, 0)
+            after_eos = (generated == eos_token_id).cumsum(dim=1) >= 1
+            generated.masked_fill(after_eos, 0)
 
-        return token_ids
+        return generated

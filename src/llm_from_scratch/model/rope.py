@@ -27,15 +27,15 @@ class RotaryEmbedding(nn.Module):
         self.cos = nn.Buffer(cos)
         self.sin = nn.Buffer(sin)
 
-    def forward(self, seq_len: int) -> tuple[Tensor, Tensor]:
+    def forward(self, seq_len: int, offset: int = 0) -> tuple[Tensor, Tensor]:
         """Return (cos, sin) tensors for positions 0..seq_len-1.
 
         Returns:
             cos: shape (seq_len, head_dim)
             sin: shape (seq_len, head_dim)
         """
-        cos = self.cos[0:seq_len,]
-        sin = self.sin[0:seq_len,]
+        cos = self.cos[offset : offset + seq_len,]
+        sin = self.sin[offset : offset + seq_len,]
         return cos, sin
 
 

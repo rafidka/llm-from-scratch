@@ -799,4 +799,48 @@
 - [x] **Grouped Query Attention (GQA)** — Implement KV head sharing
 
 ### Open questions
-- Next: KV Cache
+- Next: Flash Attention
+
+---
+
+## Session 27 — 2026-04-24 — KV Cache
+
+### What we covered
+- Implemented KV cache for efficient autoregressive inference — stores K/V after projection, reshape, and RoPE to avoid recomputing them each generation step
+- Rewrote `MultiHeadAttention.forward()` to accept `kv_cache` parameter, append new K/V to cache, return updated cache alongside output
+- Added position offset support in `GPTEmbeddings` and `RotaryEmbedding` for correct positional encoding during cached generation
+- Fully rewrote `GPTForCausalLM.generate()` to use KV cache: first step processes full prompt, subsequent steps pass only the new token with the cache
+- Fixed causal mask in `scaled_dot_product_attention` to handle asymmetric Q/K lengths (Q=1 token, K=full cached sequence)
+- Updated all callers (trainers, tests, examples) for new return types
+
+### Key learnings
+- During generation, only the new Q is needed (used once and discarded); K/V for all previous tokens are reused by every future Q — that's why we cache K/V but not Q
+- With KV cache, the model only processes 1 token per generation step instead of the full growing sequence — O(n) instead of O(n²)
+- KV cache stores un-expanded K/V (`num_kv_heads` format) for GQA memory efficiency — expansion happens after cache retrieval
+- Position offset is critical: with absolute positional embeddings, every new token was assigned position 0 without the offset, causing repeated-character generation bugs. RoPE handles this internally via the cache_seq_len offset in MHA.
+- Causal mask must be sliced: `triu(ones[k,k])[-q:,:]` — takes last `q_seq_len` rows so a single new Q token can attend to all cached K positions
+- Cache truncation at `max_seq_len` is done by trimming the stored K/V tensors per layer
+
+### Code design changes (significant divergence from earlier implementation)
+- **Return types changed from raw Tensors to dataclasses**: `MultiHeadAttentionOutput`, `TransformerBlockOutput`, `GPTOutput` — each has `.output` and `.kv_cache`/`.kv_caches` fields. This is a breaking change from the earlier design where all `forward()` methods returned plain Tensors. Every caller (trainers, tests, examples, classification model) now accesses `.output`.
+- **`generate()` paradigm shift**: Previously, `generate()` passed the full growing `token_ids` sequence through the model each step and truncated at `max_seq_len`. Now, step 0 processes the full prompt to populate the cache, and steps 1+ pass only `next_tokens` (shape `[batch, 1]`) with the cache. No more growing input or `attn_mask` concatenation.
+- **LoRA resolution refactored**: Moved from inline ternaries (`self.W_q_lora(x) if self.W_q_lora else self.W_q(x)`) to upfront resolution (`W_q = self.W_q_lora if self.W_q_lora else self.W_q`), then using `W_q(x)` throughout. Cleaner and avoids repeated checks.
+- **GQA expansion switched from `repeat_interleave` to `expand` trick**: `view(batch, num_kv_heads, 1, total_seq_len, head_dim).expand(-1, -1, group_size, -1, -1).reshape(batch, num_heads, total_seq_len, head_dim)` — zero-copy via stride tricks, replaces the previous `repeat_interleave(group_size, dim=1)` which copied data. Also correctly handles `total_seq_len` (cache + new) instead of just `seq_len`.
+
+### Code written
+- `src/llm_from_scratch/attention/scaled_dot_product.py` — `MultiHeadAttentionOutput` dataclass, KV cache logic in `forward()`, causal mask fix for asymmetric Q/K, RoPE offset, LoRA refactor, GQA expand fix with `total_seq_len`
+- `src/llm_from_scratch/model/rope.py` — Added `offset` parameter to `RotaryEmbedding.forward()`
+- `src/llm_from_scratch/model/embeddings.py` — Added `offset` parameter to `GPTEmbeddings.forward()` for correct positional IDs with cache
+- `src/llm_from_scratch/model/base.py` — `TransformerBlockOutput` and `GPTOutput` dataclasses, `kv_cache`/`kv_caches` threaded through `TransformerBlock` and `GPT.forward()`, position offset derived from cache
+- `src/llm_from_scratch/model/causallm.py` — `GPTOutput` return type, fully rewritten `generate()` with KV cache
+- `src/llm_from_scratch/model/classification.py` — `GPTOutput` return type with `kv_caches`
+- `src/llm_from_scratch/training/causallm.py` — Access `.output` from `GPTOutput`
+- `src/llm_from_scratch/training/classification.py` — Access `.output` from `GPTOutput` (3 call sites)
+- `tests/attention/test_attention.py` — Access `.output` from `MultiHeadAttentionOutput`
+- `examples/` — Updated all example scripts for new return types, rewrote `kv_cache.py` as full model test
+
+### PLAN.md items completed
+- [x] **KV Cache** — Implement efficient autoregressive inference
+
+### Open questions
+- Next: Flash Attention

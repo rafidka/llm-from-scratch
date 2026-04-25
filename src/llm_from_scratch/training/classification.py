@@ -63,7 +63,7 @@ class GPTForClassificationTrainer(GPTTrainer[GPTForClassification]):
         attention_mask: Tensor | None = None,
     ):
         with self.mp_context:
-            logits = self.model(input_ids, attention_mask)
+            logits = self.model(input_ids, attention_mask).output
             loss = self.loss_fn(logits, targets)
         (loss / self.grad_accml_steps).backward()
 
@@ -101,7 +101,7 @@ class GPTForClassificationTrainer(GPTTrainer[GPTForClassification]):
             attention_mask = (input_ids != 0).long()
             input_ids = input_ids.to(self.device)
             attention_mask = attention_mask.to(self.device)
-            logits = self.model(input_ids, attention_mask)
+            logits = self.model(input_ids, attention_mask).output
             preds = logits.argmax(dim=-1)
             for text, pred in zip(texts, preds):
                 label = "Positive" if pred.item() == 1 else "Negative"
@@ -121,7 +121,9 @@ class GPTForClassificationTrainer(GPTTrainer[GPTForClassification]):
                 input_ids = input_ids.to(self.device)
                 true_labels = true_labels.to(self.device)
                 attention_mask = attention_mask.to(self.device)
-                pred_labels = self.model(input_ids, attention_mask).argmax(dim=-1)
+                pred_labels = self.model(input_ids, attention_mask).output.argmax(
+                    dim=-1
+                )
 
                 all_true_labels = torch.cat((all_true_labels, true_labels))
                 all_pred_labels = torch.cat((all_pred_labels, pred_labels))

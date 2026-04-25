@@ -9,7 +9,7 @@ temperature = 1.0
 top_k = 11
 
 gpt = GPTForCausalLM(1000, 64, 8, 8, 32, 0.1)
-logits = gpt.forward(input_ids)
+logits = gpt.forward(input_ids).output
 print("logits", logits.shape)
 last_logit = logits[:, -1, :]
 print("last_logits", last_logit.shape)

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from torch import nn
@@ -72,6 +73,12 @@ class FeedForwardSwiGLU(nn.Module):
         return self.dropout(W_down(W_gate(x) * self.silu(W_up(x))))
 
 
+@dataclass
+class TransformerBlockOutput:
+    output: "Tensor"
+    kv_cache: tuple["Tensor", "Tensor"]
+
+
 class TransformerBlock(nn.Module):
     def __init__(
         self,
@@ -108,12 +115,24 @@ class TransformerBlock(nn.Module):
         self.ff.lorafy(rank, alpha, sigma)
         self.ln2.requires_grad_(False)
 
-    def forward(self, x: "Tensor", attn_mask: "Tensor | None" = None) -> "Tensor":
+    def forward(
+        self,
+        x: "Tensor",
+        attn_mask: "Tensor | None" = None,
+        kv_cache: tuple["Tensor", "Tensor"] | None = None,
+    ) -> "TransformerBlockOutput":
         # x: [batch, seq_len, embed_dim]
         out = x
-        out = out + self.dropout(self.attn(self.ln1(out), attn_mask))
+        attn_ret = self.attn.forward(self.ln1(out), attn_mask, kv_cache)
+        out = out + self.dropout(attn_ret.output)
         out = out + self.dropout(self.ff(self.ln2(out)))
-        return out
+        return TransformerBlockOutput(out, attn_ret.kv_cache)
+
+
+@dataclass
+class GPTOutput:
+    output: "Tensor"
+    kv_caches: list[tuple["Tensor", "Tensor"]]
 
 
 class GPT(nn.Module):
@@ -277,16 +296,32 @@ class GPT(nn.Module):
         self.ln.requires_grad_(False)
 
     def forward(
-        self, token_ids: "Tensor", attn_mask: "Tensor | None" = None
-    ) -> "Tensor":
+        self,
+        token_ids: "Tensor",
+        attn_mask: "Tensor | None" = None,
+        kv_caches: list[tuple["Tensor", "Tensor"]] | None = None,
+    ) -> GPTOutput:
         # token_ids: [batch, seq_len]
         if len(token_ids.shape) != 2:
             raise RuntimeError("Expecting token_ids to be of shape (batch, seq_len).")
-        out = self.embeddings(token_ids)
-        for block in self.transformer_blocks:
+        # TODO Improve readability.
+        offset = kv_caches[0][0].shape[-2] if kv_caches else 0
+        out = self.embeddings(token_ids, offset)
+        kv_caches_ret: list[tuple["Tensor", "Tensor"]] = []
+        for idx, block in enumerate(self.transformer_blocks):
+            kv_cache = kv_caches[idx] if kv_caches else None
+
             if self.use_gradient_checkpointing:
-                out = checkpoint(block, out, attn_mask, use_reentrant=False)
+                block_ret = checkpoint(
+                    block, out, attn_mask, kv_cache, use_reentrant=False
+                )
             else:
-                out = block(out, attn_mask)
+                block_ret = block(out, attn_mask, kv_cache)
+
+            out = block_ret.output
+            kv_caches_ret.append(block_ret.kv_cache)
         out = self.ln(out)
-        return out  # [batch, seq_len, embed_dim]
+        return GPTOutput(
+            out,  # [batch, seq_len, embed_dim]
+            kv_caches_ret,
+        )

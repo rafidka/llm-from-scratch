@@ -102,7 +102,7 @@ Evolving our GPT-2 toward a modern LLM (LLaMA-style):
 - [x] **RoPE** — Replace absolute positional embeddings with Rotary Positional Embeddings
 - [x] **SwiGLU** — Replace GELU FFN with SwiGLU activation
 - [x] **Grouped Query Attention (GQA)** — Implement KV head sharing
-- [ ] **KV Cache** — Implement efficient autoregressive inference
+- [x] **KV Cache** — Implement efficient autoregressive inference
 - [ ] **Flash Attention** — Understand the IO-aware algorithm (implement simplified version,
       use the real thing via PyTorch `scaled_dot_product_attention`)
 - [ ] **Sliding window attention** — Limit attention to local context, reduce complexity

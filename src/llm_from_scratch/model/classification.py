@@ -1,6 +1,6 @@
 from torch import Tensor, nn
 
-from llm_from_scratch.model.base import GPT
+from llm_from_scratch.model.base import GPT, GPTOutput
 
 
 class GPTForClassification(GPT):
@@ -35,12 +35,19 @@ class GPTForClassification(GPT):
         self.cls_head = nn.Linear(embed_dim, num_classes, bias=False)
 
     def forward(
-        self, token_ids: "Tensor", attn_mask: "Tensor | None" = None
-    ) -> "Tensor":
-        out = super().forward(token_ids, attn_mask)
+        self,
+        token_ids: "Tensor",
+        attn_mask: "Tensor | None" = None,
+        kv_caches: list[tuple["Tensor", "Tensor"]] | None = None,
+    ) -> GPTOutput:
+        ret = super().forward(token_ids, attn_mask, kv_caches)
+        out = ret.output
         if out.ndim == 3:
             logits = self.cls_head(out[:, -1, :])  # shape [batch, embed_dim]
         elif out.ndim == 2:
             logits = self.cls_head(out[-1, :])  # shape [embed_dim]
 
-        return logits  # shape [batch, num_classes]
+        return GPTOutput(
+            logits,  # shape [batch, num_classes],
+            kv_caches=ret.kv_caches,
+        )

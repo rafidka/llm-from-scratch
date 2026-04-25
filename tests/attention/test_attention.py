@@ -166,8 +166,8 @@ class TestMultiHeadAttention:
         batch, seq_len, embed_dim, num_heads = 2, 4, 12, 3
         x = torch.randn(batch, seq_len, embed_dim)
         attn = MultiHeadAttention(embed_dim, num_heads, causal=False)
-        out = attn(x)
-        assert out.shape == (batch, seq_len, embed_dim)
+        ret = attn(x)
+        assert ret.output.shape == (batch, seq_len, embed_dim)
 
     def test_num_heads_must_divide_embed_dim(self):
         with pytest.raises(ValueError, match="embed_dim"):
@@ -192,7 +192,7 @@ class TestMultiHeadAttention:
         multi_head = MultiHeadAttention(embed_dim, num_heads=1, causal=False)
 
         out_single = single_head(x)
-        out_multi = multi_head(x)
+        out_multi = multi_head(x).output
 
         # With 1 head, they should be equivalent
         # (but won't be exactly equal due to W_o projection in multi-head)
@@ -204,5 +204,5 @@ class TestMultiHeadAttention:
 
         for num_heads in [1, 2, 3, 4, 6, 12]:
             attn = MultiHeadAttention(embed_dim, num_heads, causal=False)
-            out = attn(x)
+            out = attn(x).output
             assert out.shape == (batch, seq_len, embed_dim)
