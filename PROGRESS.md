@@ -843,7 +843,7 @@
 - [x] **KV Cache** — Implement efficient autoregressive inference
 
 ### Open questions
-- Next: Sliding window attention
+- Next: Mixture of Experts (Phase 8: Modern Innovations)
 
 ---
 
@@ -855,6 +855,7 @@
 - Learned the online softmax trick (Milakov & Gimelshein, 2018) that enables computing softmax incrementally over tiles without storing the full matrix
 - Created a benchmark comparing our custom `scaled_dot_product_attention` vs PyTorch's `F.scaled_dot_product_attention` vs the `flash-attn` library
 - Key benchmark considerations: 4D input shape `[batch, num_heads, seq_len, head_dim]`, bf16/fp16 dtype (Flash Attention doesn't activate for fp32), CUDA events for async timing, warmup iterations, `torch.cuda.reset_peak_memory_stats` for accurate memory measurement
+- Decided to defer Sliding Window Attention and Linear Attention to Phase 12 (Efficient Attention Kernels) — a mask-only implementation would be misleading since it doesn't actually reduce memory/compute; the real benefit requires block-sparse computation or custom kernels
 
 ### Key learnings
 - Standard attention writes the n×n score matrix to HBM 3 times (compute, softmax, V multiply) — this is the bottleneck, not the FLOPs
@@ -863,6 +864,7 @@
 - `F.scaled_dot_product_attention` auto-dispatches to Flash Attention on CUDA when inputs are half-precision and head_dim ≤ 256
 - The `flash-attn` library uses a different tensor layout: `[batch, seq_len, num_heads, head_dim]` (BTHD) vs PyTorch's `[batch, num_heads, seq_len, head_dim]` (BHTD)
 - Flash Attention is not an approximation — it produces the same result as standard attention, just with fewer memory reads/writes
+- Sliding window attention with masking-only is a partial solution — correct but no efficiency gain; needs block-sparse computation for real benefit
 
 ### Code written
 - `examples/attention/flash_attention.py` — Benchmark comparing our implementation, PyTorch's `F.scaled_dot_product_attention`, and the `flash-attn` library across dtypes and sequence lengths
@@ -870,5 +872,7 @@
 ### PLAN.md items completed
 - [x] **Flash Attention** — Understand the IO-aware algorithm, benchmark against PyTorch and flash-attn library
 
-### Open questions
-- Next: Sliding window attention
+### PLAN.md restructured
+- Moved Sliding Window Attention and Linear Attention from Phase 7 to new Phase 12 (Efficient Attention Kernels)
+- Added phases for Modern Innovations (MoE, MLA, MoD, Differential Attention), Multi-GPU Training, Quantization, Efficient Attention Kernels (Paged Attention, Speculative Decoding, Triton), Distributed & Long-Context Attention, and Practical Applications (Qwen 3, Gemini fine-tuning)
+- Total plan now spans 14 phases

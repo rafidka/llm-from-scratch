@@ -6,7 +6,7 @@ foundation while incorporating deep dives into modern techniques and architectur
 **Environment**: Python 3.12, uv, PyTorch. Development/testing on MacBook Pro (MPS),
 heavy training offloaded to cloud GPUs.
 
-**Total estimated effort**: ~25-38 sessions
+**Total estimated effort**: ~30-45 sessions
 
 ---
 
@@ -105,27 +105,94 @@ Evolving our GPT-2 toward a modern LLM (LLaMA-style):
 - [x] **KV Cache** — Implement efficient autoregressive inference
 - [x] **Flash Attention** — Understand the IO-aware algorithm (implement simplified version,
       use the real thing via PyTorch `scaled_dot_product_attention`)
-- [ ] **Sliding window attention** — Limit attention to local context, reduce complexity
-- [ ] **Linear attention** — Approximate softmax with kernel trick for O(n) complexity
 
 ---
 
-## Phase 8: DeepSeek Innovations
-
-**Effort: 3-5 sessions**
-
-- [ ] **Multi-head Latent Attention (MLA)** — DeepSeek's compressed KV cache approach
-- [ ] **DeepSeekMoE** — Mixture of Experts with fine-grained expert segmentation
-- [ ] **Auxiliary-loss-free load balancing** — How DeepSeek handles expert routing
-- [ ] Study DeepSeek-V2/V3 architecture papers
-
----
-
-## Phase 9: Alignment (RLHF / DPO)
+## Phase 8: Alignment
 
 **Effort: 3-4 sessions**
 
-- [ ] Understand the alignment problem and RLHF pipeline
-- [ ] Reward model training
-- [ ] **Deep dive: DPO (Direct Preference Optimization)** — simpler alternative to full RLHF
-- [ ] Implement preference-based fine-tuning on a small scale
+Aligning our model to follow instructions and preferences:
+
+- [ ] Understand the alignment problem and the RLHF pipeline
+- [ ] **Reward model training** — Train a model to score completions
+- [ ] **DPO (Direct Preference Optimization)** — Simpler alternative to full RLHF; implement preference-based fine-tuning
+- [ ] Implement alignment fine-tuning at small scale on our model
+
+---
+
+## Phase 9: Quantization
+
+**Effort: 2-3 sessions**
+
+Reducing model size and inference cost:
+
+- [ ] **Post-training quantization (PTQ)** — int8 and int4 weight quantization
+- [ ] **GPTQ / AWQ** — Weight-only quantization for efficient inference
+- [ ] **Quantization-aware training (QAT)** — Train with quantization in the loop
+- [ ] **KV cache quantization** — Compress cached K/V for longer contexts
+
+---
+
+## Phase 10: Practical Applications
+
+**Effort: 3-4 sessions**
+
+Fine-tuning production open-source models:
+
+- [ ] **Qwen 3** — Understand architecture, load pretrained weights, fine-tune with LoRA/QLoRA
+- [ ] **Gemini** — Understand architecture, fine-tune for specific tasks
+- [ ] **Chat templates & instruction formatting** — Proper prompt formatting for chat models
+- [ ] **Evaluation** — Benchmark fine-tuned models on downstream tasks
+
+---
+
+## Phase 11: Modern Innovations
+
+**Effort: 3-5 sessions**
+
+Modern architectural innovations beyond the GPT-2 baseline:
+
+- [ ] **Mixture of Experts (MoE)** — Implement sparse MoE layer with top-k routing; understand load balancing and capacity factors
+- [ ] **Multi-head Latent Attention (MLA)** — DeepSeek's compressed KV cache via low-rank projections
+- [ ] **Mixture-of-Depths (MoD)** — Dynamically skip layers per token; not every token needs full computation
+- [ ] **Differential Attention** — Dual softmax heads with subtractive gating to reduce attention noise
+
+---
+
+## Phase 12: Efficient Attention Kernels
+
+**Effort: 4-5 sessions**
+
+Low-level optimizations for attention compute and memory:
+
+- [ ] **Sliding Window Attention** — Proper block-sparse implementation (not just masking); KV cache truncation to window_size
+- [ ] **Linear Attention** — Kernel trick for O(n) complexity; Performer/Linear Transformer approach
+- [ ] **Paged Attention** — vLLM-style KV cache memory management with non-contiguous blocks
+- [ ] **Speculative Decoding** — Draft-then-verify with a small model; leverage KV cache for verification
+- [ ] **Custom Triton kernel** — Write a minimal GPU attention kernel to understand kernel-level programming
+
+---
+
+## Phase 13: Multi-GPU Training & Inference
+
+**Effort: 3-4 sessions**
+
+Scaling training and inference across multiple GPUs:
+
+- [ ] **Data Parallelism** — DDP, FSDP, and gradient accumulation
+- [ ] **Tensor Parallelism** — Megatron-style layer splitting across GPUs
+- [ ] **Pipeline Parallelism** — Split model stages across GPUs
+- [ ] **Distributed training** — Run training on 2+ GPUs end-to-end
+
+---
+
+## Phase 14: Distributed & Long-Context Attention
+
+**Effort: 2-3 sessions**
+
+Scaling beyond single-GPU memory for long sequences:
+
+- [ ] **Ring Attention** — Distribute sequences across GPUs with overlapping compute/communication
+- [ ] **Sequence Parallelism** — Distribute sequence dimension across GPUs
+- [ ] **Continuous batching** — Inference serving with dynamic batch management
